@@ -1,6 +1,8 @@
 #ifndef BOT_QUICKGROUP_H
 #define BOT_QUICKGROUP_H
 
+// By leewheel 20260523 - quick group bot fill/dissolve API
+
 class ChatHandler;
 class Player;
 

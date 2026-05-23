@@ -3345,6 +3345,7 @@ void BotDataMgr::AddNpcBotData(uint32 entry, uint32 roles, uint8 spec, uint32 fa
     BOT_LOG_ERROR("sql.sql", "BotDataMgr::AddNpcBotData(): trying to add new data but entry already exists! entry = {}", entry);
 }
 
+// By leewheel 20260523
 uint8 BotDataMgr::GetNpcBotHireSource(uint32 entry)
 {
     NpcBotData const* data = SelectNpcBotData(entry);
@@ -3403,6 +3404,7 @@ Creature* BotDataMgr::FindFreeHireBotForQuickGroup(Player const* player, uint8 b
     uint32 const pick = candidates[urand(0, uint32(candidates.size() - 1))];
     return const_cast<Creature*>(FindBot(pick));
 }
+// end By leewheel 20260523
 
 NpcBotData const* BotDataMgr::SelectNpcBotData(uint32 entry)
 {
@@ -3511,7 +3513,7 @@ void BotDataMgr::UpdateNpcBotData(uint32 entry, NpcBotDataUpdateType updateType,
             CharacterDatabase.Execute(bstmt);
             break;
         }
-        case NPCBOT_UPDATE_HIRE_SOURCE:
+        case NPCBOT_UPDATE_HIRE_SOURCE: // By leewheel 20260523
             itr->second.hire_source = *(uint8*)(data);
             bstmt = CharacterDatabase.GetPreparedStatement(CHAR_UPD_NPCBOT_HIRE_SOURCE);
             bstmt->setUInt8(0, itr->second.hire_source);

@@ -456,12 +456,12 @@ Creature* CreatureAI::DoSummonFlyer(uint32 entry, WorldObject* obj, float flight
     return me->SummonCreature(entry, pos, summonType, despawnTime);
 }
 
-//npcbot: boss mechanics - pick random player or NPCBot in range
+//npcbot: boss mechanics - pick random player or NPCBot in range By leewheel 20260523
 Unit* CreatureAI::SelectRandomPlayerOrNPCBot(float range, bool includeTank, uint32 excludeAura)
 {
     std::list<Unit*> targets;
-    Bcore::AnyUnitInObjectRangeCheck check(me, range);
-    Bcore::UnitListSearcher<Bcore::AnyUnitInObjectRangeCheck> searcher(me, targets, check);
+    Trinity::AnyUnitInObjectRangeCheck check(me, range);
+    Trinity::UnitListSearcher<Trinity::AnyUnitInObjectRangeCheck> searcher(me, targets, check);
     Cell::VisitAllObjects(me, searcher, range);
 
     targets.remove_if([this, includeTank, excludeAura](Unit* unit) -> bool {
@@ -486,6 +486,6 @@ Unit* CreatureAI::SelectRandomPlayerOrNPCBot(float range, bool includeTank, uint
     if (targets.empty())
         return nullptr;
 
-    return Bcore::Containers::SelectRandomContainerElement(targets);
+    return Trinity::Containers::SelectRandomContainerElement(targets);
 }
-//end npcbot
+//end npcbot By leewheel 20260523

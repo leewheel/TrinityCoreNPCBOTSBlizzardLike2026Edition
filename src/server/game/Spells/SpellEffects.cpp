@@ -297,6 +297,7 @@ void Spell::EffectEnvironmentalDMG()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
+    // By leewheel 20260523 - guard targets that left the world (e.g. teleported bots)
     if (!unitTarget || !unitTarget->IsInWorld() || !unitTarget->IsAlive())
         return;
 
@@ -309,7 +310,7 @@ void Spell::EffectEnvironmentalDMG()
         DamageInfo damageInfo(unitCaster, unitTarget, damage, m_spellInfo, m_spellInfo->GetSchoolMask(), SPELL_DIRECT_DAMAGE, BASE_ATTACK);
         Unit::CalcAbsorbResist(damageInfo);
 
-        if (!unitTarget->IsInWorld() || !unitTarget->IsAlive())
+        if (!unitTarget->IsInWorld() || !unitTarget->IsAlive()) // By leewheel 20260523
             return;
 
         SpellNonMeleeDamage log(unitCaster, unitTarget, m_spellInfo->Id, m_spellInfo->GetSchoolMask());
@@ -317,7 +318,7 @@ void Spell::EffectEnvironmentalDMG()
         log.absorb = damageInfo.GetAbsorb();
         log.resist = damageInfo.GetResist();
 
-        if (unitCaster && unitTarget->IsInWorld())
+        if (unitCaster && unitTarget->IsInWorld()) // By leewheel 20260523
             unitCaster->SendSpellNonMeleeDamageLog(&log);
     }
 }

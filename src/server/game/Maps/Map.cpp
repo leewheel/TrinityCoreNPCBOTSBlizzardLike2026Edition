@@ -1034,7 +1034,7 @@ void Map::RemoveFromMap(T *obj, bool remove)
 {
     bool const inWorld = obj->IsInWorld() && obj->GetTypeId() >= TYPEID_UNIT && obj->GetTypeId() <= TYPEID_GAMEOBJECT;
 
-    //npcbot: tempfix for bots out of grid during remove from map
+    //npcbot: tempfix for bots out of grid during remove from map By leewheel 20260523
     if constexpr (std::is_base_of_v<Creature, T>)
     {
         if (obj->IsNPCBot())
@@ -1076,7 +1076,7 @@ void Map::RemoveFromMap(T *obj, bool remove)
             return;
         }
     }
-    //end npcbot
+    //end npcbot By leewheel 20260523
 
     obj->RemoveFromWorld();
 

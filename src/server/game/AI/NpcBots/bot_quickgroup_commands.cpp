@@ -1,5 +1,6 @@
 /*
  * Quick group NPCBot commands — top-level + shared handlers for .npcbot quick5
+ * By leewheel 20260523
  */
 
 #include "bot_quickgroup.h"

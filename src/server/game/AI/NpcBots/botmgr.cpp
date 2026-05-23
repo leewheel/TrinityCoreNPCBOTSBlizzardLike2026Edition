@@ -827,6 +827,7 @@ void BotMgr::RemoveBot(ObjectGuid guid, uint8 removetype)
     bot->SetFaction(bot->GetCreatureTemplate()->faction);
     bot->SetLevel(bot->GetCreatureTemplate()->minlevel);
 
+    // By leewheel 20260523
     if (resetType == BOTAI_RESET_DISMISS)
     {
         if (BotDataMgr::GetNpcBotHireSource(bot->GetEntry()) == NPCBOT_HIRE_QUICK_GROUP)
@@ -840,6 +841,7 @@ void BotMgr::RemoveBot(ObjectGuid guid, uint8 removetype)
         uint8 hireSource = NPCBOT_HIRE_NORMAL;
         BotDataMgr::UpdateNpcBotData(bot->GetEntry(), NPCBOT_UPDATE_HIRE_SOURCE, &hireSource);
     }
+    // end By leewheel 20260523
 }
 
 void BotMgr::UnbindBot(ObjectGuid guid)
@@ -875,6 +877,7 @@ BotAddResult BotMgr::AddBot(Creature* bot)
     return AddBotEx(bot, true);
 }
 
+// By leewheel 20260523 - optional hire cost (quick group uses false)
 BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost)
 {
     ASSERT(bot->IsNPCBot());
@@ -922,7 +925,7 @@ BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost)
     //        return BOT_ADD_INSTANCE_LIMIT;
     //    }
     //}
-    if (!owned && chargeHireCost)
+    if (!owned && chargeHireCost) // By leewheel 20260523
     {
         uint32 cost = BotCfg::GetNpcBotCostHire(_owner->GetLevel(), bot->GetBotClass());
         if (!_owner->HasEnoughMoney(cost))
@@ -2200,6 +2203,7 @@ void BotMgr::SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole)
     ai->SetSpec(spec, true);
 }
 
+// By leewheel 20260523
 BotAddResult BotMgr::AddServiceBot(Creature* bot, uint32 botRole)
 {
     BotAddResult res = AddBotEx(bot, false);
@@ -2216,7 +2220,9 @@ BotAddResult BotMgr::AddServiceBot(Creature* bot, uint32 botRole)
 
     return BOT_ADD_SUCCESS;
 }
+// end By leewheel 20260523
 
+// By leewheel 20260523
 void BotMgr::DismissQuickGroupBots()
 {
     std::vector<ObjectGuid> toRemove;
@@ -2231,6 +2237,7 @@ void BotMgr::DismissQuickGroupBots()
     for (ObjectGuid guid : toRemove)
         RemoveBot(guid, BOT_REMOVE_DISMISS);
 }
+// end By leewheel 20260523
 
 #ifdef _MSC_VER
 # pragma warning(pop)

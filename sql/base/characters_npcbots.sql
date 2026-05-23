@@ -31,7 +31,7 @@ CREATE TABLE `characters_npcbot` (
   `equipNeck` int unsigned NOT NULL DEFAULT '0',
   `spells_disabled` longtext COLLATE utf8mb4_unicode_ci,
   `miscvalues` longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
-  `hire_source` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '0=normal 1=quick group 2=LFG',
+  `hire_source` tinyint unsigned NOT NULL DEFAULT '0' COMMENT '0=normal 1=quick group 2=LFG', -- By leewheel 20260523
   PRIMARY KEY (`entry`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 

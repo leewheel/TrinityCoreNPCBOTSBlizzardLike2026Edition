@@ -3837,6 +3837,7 @@ Unit* bot_ai::_getVehicleTarget(BotVehicleStrats /*strat*/) const
     return t;
 }
 //GETTARGET
+// By leewheel 20260523 - group bots prefer fleeing enemies
 namespace
 {
 bool IsEnemyFleeing(Unit const* unit)
@@ -3856,6 +3857,7 @@ bool IsEnemyFleeing(Unit const* unit)
     return false;
 }
 }
+// end By leewheel 20260523
 
 //Returns attack target or 'no target' and distant check target or 'no target'
 //All code above 'x = _getTarget() call must not dereference opponent or disttarget since it can be invalid
@@ -4346,7 +4348,7 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     if (u && !IAmFree() && (master->IsInCombat() || u->IsInCombat())/* && !InDuel(u)*/ && !IsInBotParty(u) && (BotCfg::IsPvPEnabled() || !u->IsControlledByPlayer()) &&
         (!HasBotCommandState(BOT_COMMAND_STAY) || (!IsRanged() ? me->IsWithinMeleeRange(u) : me->GetDistance(u) < foldist)))
     {
-        if (!gr)
+        if (!gr) // By leewheel 20260523
             return { u, u };
     }
 
@@ -4354,7 +4356,7 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     if (canAttack && (!IAmFree() || me->GetDistance(mytar) < float(BOT_MAX_CHASE_RANGE)) &&/* !InDuel(mytar) &&*/
         !(mytar->GetVictim() != nullptr && IsTank() && IsTank(mytar->GetVictim())))
     {
-        if (!gr || IsEnemyFleeing(mytar))
+        if (!gr || IsEnemyFleeing(mytar)) // By leewheel 20260523
         {
             //BOT_LOG_ERROR("entities.player", "bot {} continues attack its target {}", me->GetName(), mytar->GetName());
             if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
@@ -4437,6 +4439,7 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     Bcore::UnitListSearcher searcher(master->ToUnit(), unitList, check);
     Cell::VisitAllObjects(HasBotCommandState(BOT_COMMAND_STAY) ? me->ToUnit() : master->ToUnit(), searcher, maxdist);
 
+    // By leewheel 20260523
     if (!IAmFree() && gr)
     {
         Unit* fleeingTarget = nullptr;
@@ -4460,6 +4463,7 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
             return { fleeingTarget, fleeingTarget };
         }
     }
+    // end By leewheel 20260523
 
     if (IAmFree())
     {

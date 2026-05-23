@@ -328,7 +328,7 @@ std::string UnitAI::GetDebugInfo() const
     return sstr.str();
 }
 
-//npcbot: cast on random player or NPCBot in range (boss 点名)
+//npcbot: cast on random player or NPCBot in range (boss 点名) By leewheel 20260523
 SpellCastResult UnitAI::DoCastRandomTargetOrNPCBot(uint32 spellId, float range, bool includeTank, uint32 excludeAura, bool triggered)
 {
     if (CreatureAI* creatureAI = dynamic_cast<CreatureAI*>(this))
@@ -342,7 +342,7 @@ SpellCastResult UnitAI::DoCastRandomTargetOrNPCBot(uint32 spellId, float range, 
     }
     return SPELL_FAILED_BAD_TARGETS;
 }
-//end npcbot
+//end npcbot By leewheel 20260523
 
 DefaultTargetSelector::DefaultTargetSelector(Unit const* unit, float dist, bool playerOnly, bool withTank, int32 aura)
     : _me(unit), _dist(dist), _playerOnly(playerOnly), _exception(!withTank ? unit->GetThreatManager().GetLastVictim() : nullptr), _aura(aura)
@@ -361,9 +361,9 @@ bool DefaultTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && (target->GetTypeId() != TYPEID_PLAYER))
-        //npcbot: allow to target bots for boss player-only mechanics
+        //npcbot: allow to target bots for boss player-only mechanics By leewheel 20260523
         if (!target->IsNPCBot())
-        //end npcbot
+        //end npcbot By leewheel 20260523
         return false;
 
     if (_dist > 0.0f && !_me->IsWithinCombatRange(target, _dist))
@@ -462,9 +462,9 @@ bool NonTankTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
-        //npcbot
+        //npcbot By leewheel 20260523
         if (!target->IsNPCBot())
-        //end npcbot
+        //end npcbot By leewheel 20260523
         return false;
 
     if (Unit* currentVictim = _source->GetThreatManager().GetCurrentVictim())
@@ -482,9 +482,9 @@ bool PowerUsersSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
-        //npcbot
+        //npcbot By leewheel 20260523
         if (!target->IsNPCBot())
-        //end npcbot
+        //end npcbot By leewheel 20260523
         return false;
 
     if (_dist > 0.0f && !_me->IsWithinCombatRange(target, _dist))
@@ -502,9 +502,9 @@ bool FarthestTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
-        //npcbot
+        //npcbot By leewheel 20260523
         if (!target->IsNPCBot())
-        //end npcbot
+        //end npcbot By leewheel 20260523
         return false;
 
     if (_dist > 0.0f && !_me->IsWithinCombatRange(target, _dist))

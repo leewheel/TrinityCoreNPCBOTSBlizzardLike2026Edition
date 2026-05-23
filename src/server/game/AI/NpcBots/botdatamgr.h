@@ -79,7 +79,7 @@ enum NpcBotDataUpdateType
     NPCBOT_UPDATE_MISCVALUES,
     NPCBOT_UPDATE_FACTION,
     NPCBOT_UPDATE_EQUIPS,
-    NPCBOT_UPDATE_HIRE_SOURCE,
+    NPCBOT_UPDATE_HIRE_SOURCE, // By leewheel 20260523
     NPCBOT_UPDATE_ERASE,
     NPCBOT_UPDATE_TRANSMOG_ERASE,
     NPCBOT_UPDATE_END
@@ -96,7 +96,7 @@ struct NpcBotData
     uint32 roles;
     uint32 faction;
     uint8 spec;
-    uint8 hire_source;
+    uint8 hire_source; // By leewheel 20260523
     std::array<uint32, BOT_INVENTORY_SIZE> equips = {};
     DisabledSpellsContainer disabled_spells;
     MiscValuesContainer miscvalues;
@@ -219,9 +219,11 @@ public:
 
     static void AddNpcBotData(uint32 entry, uint32 roles, uint8 spec, uint32 faction);
     static NpcBotData const* SelectNpcBotData(uint32 entry);
+    // By leewheel 20260523
     static uint8 GetNpcBotHireSource(uint32 entry);
     static void SetNpcBotHireSource(uint32 entry, uint8 hireSource);
     static Creature* FindFreeHireBotForQuickGroup(Player const* player, uint8 botClass, std::set<uint8> const& usedClasses);
+    // end By leewheel 20260523
     static void UpdateNpcBotData(uint32 entry, NpcBotDataUpdateType updateType, void* data = nullptr);
     static void UpdateNpcBotDataAll(uint32 playerGuid, NpcBotDataUpdateType updateType, void* data = nullptr);
     static void SaveNpcBotStats(NpcBotStats const& stats);

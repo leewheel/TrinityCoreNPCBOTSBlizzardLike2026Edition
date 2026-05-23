@@ -202,9 +202,11 @@ public:
     [[nodiscard]] BotAddResult RebindBot(Creature* bot);
     [[nodiscard]] BotAddResult AddDungeonBot(Creature* bot);
     [[nodiscard]] BotAddResult AddBot(Creature* bot);
+    // By leewheel 20260523
     [[nodiscard]] BotAddResult AddBotEx(Creature* bot, bool chargeHireCost = true);
     [[nodiscard]] BotAddResult AddServiceBot(Creature* bot, uint32 botRole);
     void DismissQuickGroupBots();
+    // end By leewheel 20260523
     static void SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole);
     bool AddBotToGroup(Creature* bot);
     void RemoveBotFromBGQueue(Creature const* bot);

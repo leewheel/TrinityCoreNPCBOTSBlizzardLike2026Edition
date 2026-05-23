@@ -257,9 +257,9 @@ class TC_GAME_API CreatureAI : public UnitAI
         static bool IsInBounds(CreatureBoundary const& boundary, Position const* who);
         bool IsInBoundary(Position const* who = nullptr) const;
 
-        //npcbot: random player or NPCBot in range (boss mechanics / manual scripts)
+        //npcbot: random player or NPCBot in range (boss mechanics / manual scripts) By leewheel 20260523
         Unit* SelectRandomPlayerOrNPCBot(float range = 100.0f, bool includeTank = false, uint32 excludeAura = 0);
-        //end npcbot
+        //end npcbot By leewheel 20260523
 
     protected:
         void EngagementStart(Unit* who);

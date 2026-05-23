@@ -32,12 +32,14 @@ struct Position;
 
 using AoeSpotsVec = std::vector<std::pair<Position, float> >;
 
+// By leewheel 20260523 - quick group / LFG hire tracking
 enum NpcBotHireSource : uint8
 {
     NPCBOT_HIRE_NORMAL        = 0,
     NPCBOT_HIRE_QUICK_GROUP   = 1,
     NPCBOT_HIRE_LFG           = 2,
 };
+// end By leewheel 20260523
 
 enum BotCommonValues
 {

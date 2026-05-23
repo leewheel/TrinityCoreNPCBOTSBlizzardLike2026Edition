@@ -785,7 +785,7 @@ void GameObject::Update(uint32 diff)
                     }
                     else if (Unit* target = ObjectAccessor::GetUnit(*this, m_lootStateUnitGUID))
                     {
-                        if (!target->IsInWorld())
+                        if (!target->IsInWorld()) // By leewheel 20260523
                             break;
 
                         // Some traps do not have a spell but should be triggered
