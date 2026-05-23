@@ -3837,6 +3837,26 @@ Unit* bot_ai::_getVehicleTarget(BotVehicleStrats /*strat*/) const
     return t;
 }
 //GETTARGET
+namespace
+{
+bool IsEnemyFleeing(Unit const* unit)
+{
+    if (!unit || !unit->IsAlive() || !unit->IsCreature())
+        return false;
+
+    if (unit->HasUnitState(UNIT_STATE_FLEEING))
+        return true;
+
+    if (unit->ToCreature()->IsInEvadeMode())
+        return true;
+
+    if (unit->GetMotionMaster()->GetCurrentMovementGeneratorType() == FLEEING_MOTION_TYPE)
+        return true;
+
+    return false;
+}
+}
+
 //Returns attack target or 'no target' and distant check target or 'no target'
 //All code above 'x = _getTarget() call must not dereference opponent or disttarget since it can be invalid
 std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &reset) const
@@ -4326,18 +4346,21 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     if (u && !IAmFree() && (master->IsInCombat() || u->IsInCombat())/* && !InDuel(u)*/ && !IsInBotParty(u) && (BotCfg::IsPvPEnabled() || !u->IsControlledByPlayer()) &&
         (!HasBotCommandState(BOT_COMMAND_STAY) || (!IsRanged() ? me->IsWithinMeleeRange(u) : me->GetDistance(u) < foldist)))
     {
-        //BOT_LOG_ERROR("entities.player", "bot {} starts attack master's target {}", me->GetName(), u->GetName());
-        return { u, u };
+        if (!gr)
+            return { u, u };
     }
 
     bool canAttack = mytar && CanBotAttack(mytar, byspell);
     if (canAttack && (!IAmFree() || me->GetDistance(mytar) < float(BOT_MAX_CHASE_RANGE)) &&/* !InDuel(mytar) &&*/
         !(mytar->GetVictim() != nullptr && IsTank() && IsTank(mytar->GetVictim())))
     {
-        //BOT_LOG_ERROR("entities.player", "bot {} continues attack its target {}", me->GetName(), mytar->GetName());
-        if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
-            reset = true;
-        return { mytar, mytar };
+        if (!gr || IsEnemyFleeing(mytar))
+        {
+            //BOT_LOG_ERROR("entities.player", "bot {} continues attack its target {}", me->GetName(), mytar->GetName());
+            if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
+                reset = true;
+            return { mytar, mytar };
+        }
     }
 
     //check group
@@ -4413,6 +4436,30 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     NearestHostileUnitCheck check(me, maxdist, byspell, this);
     Bcore::UnitListSearcher searcher(master->ToUnit(), unitList, check);
     Cell::VisitAllObjects(HasBotCommandState(BOT_COMMAND_STAY) ? me->ToUnit() : master->ToUnit(), searcher, maxdist);
+
+    if (!IAmFree() && gr)
+    {
+        Unit* fleeingTarget = nullptr;
+        float fleeingDist = maxdist;
+        for (Unit* un : unitList)
+        {
+            if (IsEnemyFleeing(un) && CanBotAttack(un, byspell))
+            {
+                float dist = me->GetDistance(un);
+                if (!fleeingTarget || dist < fleeingDist)
+                {
+                    fleeingTarget = un;
+                    fleeingDist = dist;
+                }
+            }
+        }
+        if (fleeingTarget)
+        {
+            if (!mytar || mytar != fleeingTarget)
+                reset = true;
+            return { fleeingTarget, fleeingTarget };
+        }
+    }
 
     if (IAmFree())
     {

@@ -242,6 +242,10 @@ class TC_GAME_API UnitAI
         SpellCastResult DoCastVictim(uint32 spellId, CastSpellExtraArgs const& args = {});
         SpellCastResult DoCastAOE(uint32 spellId, CastSpellExtraArgs const& args = {}) { return DoCast(nullptr, spellId, args); }
 
+        //npcbot: cast on random player or NPCBot (boss 点名 mechanics)
+        SpellCastResult DoCastRandomTargetOrNPCBot(uint32 spellId, float range = 100.0f, bool includeTank = false, uint32 excludeAura = 0, bool triggered = false);
+        //end npcbot
+
         float DoGetSpellMaxRange(uint32 spellId, bool positive = false);
 
         virtual bool ShouldSparWith(Unit const* /*target*/) const { return false; }

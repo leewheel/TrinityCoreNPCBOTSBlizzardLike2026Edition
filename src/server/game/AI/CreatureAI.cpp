@@ -17,6 +17,7 @@
 
 #include "CreatureAI.h"
 #include "AreaBoundary.h"
+#include "Containers.h"
 #include "Creature.h"
 #include "CreatureAIImpl.h"
 #include "CreatureTextMgr.h"
@@ -33,6 +34,9 @@
 #include "TemporarySummon.h"
 #include "Vehicle.h"
 #include "World.h"
+#include "CellImpl.h"
+#include "GridNotifiers.h"
+#include "GridNotifiersImpl.h"
 
 AISpellInfoType* UnitAI::AISpellInfo;
 AISpellInfoType* GetAISpellInfo(uint32 i) { return &UnitAI::AISpellInfo[i]; }
@@ -451,3 +455,37 @@ Creature* CreatureAI::DoSummonFlyer(uint32 entry, WorldObject* obj, float flight
     pos.m_positionZ += flightZ;
     return me->SummonCreature(entry, pos, summonType, despawnTime);
 }
+
+//npcbot: boss mechanics - pick random player or NPCBot in range
+Unit* CreatureAI::SelectRandomPlayerOrNPCBot(float range, bool includeTank, uint32 excludeAura)
+{
+    std::list<Unit*> targets;
+    Bcore::AnyUnitInObjectRangeCheck check(me, range);
+    Bcore::UnitListSearcher<Bcore::AnyUnitInObjectRangeCheck> searcher(me, targets, check);
+    Cell::VisitAllObjects(me, searcher, range);
+
+    targets.remove_if([this, includeTank, excludeAura](Unit* unit) -> bool {
+        if (!unit->IsAlive())
+            return true;
+        if (!includeTank && unit == me->GetVictim())
+            return true;
+        if (unit->GetTypeId() == TYPEID_PLAYER)
+            return false;
+        if (unit->GetTypeId() == TYPEID_UNIT && unit->IsNPCBot())
+            return false;
+        return true;
+    });
+
+    if (excludeAura)
+    {
+        targets.remove_if([excludeAura](Unit* unit) -> bool {
+            return unit->HasAura(excludeAura);
+        });
+    }
+
+    if (targets.empty())
+        return nullptr;
+
+    return Bcore::Containers::SelectRandomContainerElement(targets);
+}
+//end npcbot

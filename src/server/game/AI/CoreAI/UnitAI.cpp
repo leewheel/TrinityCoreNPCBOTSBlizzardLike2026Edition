@@ -18,6 +18,7 @@
 #include "UnitAI.h"
 #include "Containers.h"
 #include "Creature.h"
+#include "CreatureAI.h"
 #include "CreatureAIImpl.h"
 #include "MotionMaster.h"
 #include "Player.h"
@@ -327,6 +328,22 @@ std::string UnitAI::GetDebugInfo() const
     return sstr.str();
 }
 
+//npcbot: cast on random player or NPCBot in range (boss 点名)
+SpellCastResult UnitAI::DoCastRandomTargetOrNPCBot(uint32 spellId, float range, bool includeTank, uint32 excludeAura, bool triggered)
+{
+    if (CreatureAI* creatureAI = dynamic_cast<CreatureAI*>(this))
+    {
+        if (Unit* target = creatureAI->SelectRandomPlayerOrNPCBot(range, includeTank, excludeAura))
+        {
+            CastSpellExtraArgs args;
+            args.SetTriggerFlags(triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE);
+            return DoCast(target, spellId, args);
+        }
+    }
+    return SPELL_FAILED_BAD_TARGETS;
+}
+//end npcbot
+
 DefaultTargetSelector::DefaultTargetSelector(Unit const* unit, float dist, bool playerOnly, bool withTank, int32 aura)
     : _me(unit), _dist(dist), _playerOnly(playerOnly), _exception(!withTank ? unit->GetThreatManager().GetLastVictim() : nullptr), _aura(aura)
 {
@@ -344,8 +361,8 @@ bool DefaultTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && (target->GetTypeId() != TYPEID_PLAYER))
-        //npcbot: allow to target bots
-        //if (!(target->GetTypeId() == TYPEID_UNIT && target->ToCreature()->IsNPCBot()))
+        //npcbot: allow to target bots for boss player-only mechanics
+        if (!target->IsNPCBot())
         //end npcbot
         return false;
 
@@ -445,6 +462,9 @@ bool NonTankTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
+        //npcbot
+        if (!target->IsNPCBot())
+        //end npcbot
         return false;
 
     if (Unit* currentVictim = _source->GetThreatManager().GetCurrentVictim())
@@ -462,6 +482,9 @@ bool PowerUsersSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
+        //npcbot
+        if (!target->IsNPCBot())
+        //end npcbot
         return false;
 
     if (_dist > 0.0f && !_me->IsWithinCombatRange(target, _dist))
@@ -479,6 +502,9 @@ bool FarthestTargetSelector::operator()(Unit const* target) const
         return false;
 
     if (_playerOnly && target->GetTypeId() != TYPEID_PLAYER)
+        //npcbot
+        if (!target->IsNPCBot())
+        //end npcbot
         return false;
 
     if (_dist > 0.0f && !_me->IsWithinCombatRange(target, _dist))
