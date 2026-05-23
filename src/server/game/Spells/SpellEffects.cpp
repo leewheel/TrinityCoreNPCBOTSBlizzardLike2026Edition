@@ -297,7 +297,7 @@ void Spell::EffectEnvironmentalDMG()
     if (effectHandleMode != SPELL_EFFECT_HANDLE_HIT_TARGET)
         return;
 
-    if (!unitTarget || !unitTarget->IsAlive())
+    if (!unitTarget || !unitTarget->IsInWorld() || !unitTarget->IsAlive())
         return;
 
     // CalcAbsorbResist already in Player::EnvironmentalDamage
@@ -309,12 +309,15 @@ void Spell::EffectEnvironmentalDMG()
         DamageInfo damageInfo(unitCaster, unitTarget, damage, m_spellInfo, m_spellInfo->GetSchoolMask(), SPELL_DIRECT_DAMAGE, BASE_ATTACK);
         Unit::CalcAbsorbResist(damageInfo);
 
+        if (!unitTarget->IsInWorld() || !unitTarget->IsAlive())
+            return;
+
         SpellNonMeleeDamage log(unitCaster, unitTarget, m_spellInfo->Id, m_spellInfo->GetSchoolMask());
         log.damage = damageInfo.GetDamage();
         log.absorb = damageInfo.GetAbsorb();
         log.resist = damageInfo.GetResist();
 
-        if (unitCaster)
+        if (unitCaster && unitTarget->IsInWorld())
             unitCaster->SendSpellNonMeleeDamageLog(&log);
     }
 }
