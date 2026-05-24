@@ -18541,19 +18541,23 @@ bool bot_ai::GlobalUpdate(uint32 diff)
 
         if (!master->IsAlive())
         {
-            //If ghost move to corpse, else move to dead player
-            if (master->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+            // Only players have PLAYER_FLAGS; master can be stale during logout/teleport
+            if (Player const* player = master->ToPlayer())
             {
-                Corpse const* corpse = master->GetCorpse();
-                if (corpse && me->GetMap() == corpse->FindMap() && !me->IsInCombat() && !me->HasUnitState(UNIT_STATE_MOVING) &&
-                    !IsCasting() && !IsShootingWand() && me->GetDistance(corpse) > 5)
-                    BotMovement(BOT_MOVE_POINT, corpse);
-                    //me->GetMotionMaster()->MovePoint(corpse->GetMapId(), *corpse);
-            }
-            else
-            {
-                if (!HasBotCommandState(BOT_COMMAND_FOLLOW) || me->GetDistance(master) > 30 - 20 * (!me->IsWithinLOSInMap(master)))
-                    SetBotCommandState(BOT_COMMAND_FOLLOW, true);
+                //If ghost move to corpse, else move to dead player
+                if (player->HasFlag(PLAYER_FLAGS, PLAYER_FLAGS_GHOST))
+                {
+                    Corpse const* corpse = player->GetCorpse();
+                    if (corpse && me->GetMap() == corpse->FindMap() && !me->IsInCombat() && !me->HasUnitState(UNIT_STATE_MOVING) &&
+                        !IsCasting() && !IsShootingWand() && me->GetDistance(corpse) > 5)
+                        BotMovement(BOT_MOVE_POINT, corpse);
+                        //me->GetMotionMaster()->MovePoint(corpse->GetMapId(), *corpse);
+                }
+                else
+                {
+                    if (!HasBotCommandState(BOT_COMMAND_FOLLOW) || me->GetDistance(player) > 30 - 20 * (!me->IsWithinLOSInMap(player)))
+                        SetBotCommandState(BOT_COMMAND_FOLLOW, true);
+                }
             }
         }
         else if (!IsCasting(mover) && (!IsShootingWand(mover) || Rand() < 10))
