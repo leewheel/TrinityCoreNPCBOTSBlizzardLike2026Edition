@@ -39,6 +39,8 @@ void Trinity::Banner::Show(char const* applicationName, void(*log)(char const* t
     log(R"(██║ ╚████║██║     ╚██████╗██████╔╝╚██████╔╝   ██║   ███████║)");
     log(R"(╚═╝  ╚═══╝╚═╝      ╚═════╝╚═════╝  ╚═════╝    ╚═╝   ╚══════╝)" "\n");
 
+    log(R"(NPCBOTS 基于 https://github.com/trickerer/Trinity-Bots )" "\n");
+
     log(R"(请多多反馈BUG，这才能使这个版本有长足的发展。)" "\n");
 
     if (logExtraInfo)
