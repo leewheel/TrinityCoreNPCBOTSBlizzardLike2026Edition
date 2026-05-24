@@ -102,7 +102,8 @@ void WorldPackets::Chat::Chat::SetSender(WorldObject const* sender, LocaleConsta
     if (Player const* playerSender = sender->ToPlayer())
     {
         ChatTag = playerSender->GetChatTag();
-        if (playerSender->GetSession()->HasPermission(rbac::RBAC_PERM_COMMAND_GM_CHAT))
+        // LANG_ADDON must use SMSG_MESSAGECHAT or 3.3.5 clients won't fire CHAT_MSG_ADDON (breaks GM addons)
+        if (playerSender->GetSession()->HasPermission(rbac::RBAC_PERM_COMMAND_GM_CHAT) && _Language != LANG_ADDON)
             _worldPacket.SetOpcode(SMSG_GM_MESSAGECHAT);
     }
 }

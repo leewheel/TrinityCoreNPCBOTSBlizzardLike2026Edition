@@ -726,6 +726,9 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player loots an item into inventory
         virtual void OnLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid);
 
+        // Called on self-whisper LANG_ADDON messages; return true if handled
+        virtual bool OnAddonMessage(Player* player, std::string_view message);
+
 };
 
 class TC_GAME_API AccountScript : public ScriptObject
@@ -1042,6 +1045,7 @@ class TC_GAME_API ScriptMgr
         void OnMovieComplete(Player* player, uint32 movieId);
         void OnPlayerRepop(Player* player);
         void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid);
+        bool OnPlayerAddonMessage(Player* player, std::string_view message);
 
     public: /* AccountScript */
 

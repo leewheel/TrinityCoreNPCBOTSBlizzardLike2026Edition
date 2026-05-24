@@ -13,6 +13,7 @@
 #include "StringFormat.h"
 #include "Timer.h"
 #include "World.h"
+#include "WorldSession.h"
 
 #include <map>
 #include <unordered_map>
@@ -71,7 +72,7 @@ std::string GetLocalizedItemName(Player* player, ItemTemplate const* proto)
         itemId, locale))
     {
         Field* fields = result->Fetch();
-        localizedName = fields[0].Get<std::string>();
+        localizedName = fields[0].GetString();
     }
 
     if (localizedName.empty())

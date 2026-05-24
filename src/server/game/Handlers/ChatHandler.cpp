@@ -335,6 +335,8 @@ void WorldSession::HandleChatMessage(ChatMsg type, Language lang, std::string ms
                     std::string_view addonBody = msg;
                     if (BotManagerAddon::TryHandleIncoming(sender, addonBody))
                         break;
+                    if (sScriptMgr->OnPlayerAddonMessage(sender, addonBody))
+                        break;
                 }
                 GetPlayer()->WhisperAddon(msg, receiver);
             }

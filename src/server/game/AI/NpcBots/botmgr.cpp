@@ -45,6 +45,9 @@ using namespace std::string_view_literals;
 
 static std::list<BotMgr::delayed_teleport_callback_type> delayed_bot_teleports;
 
+// By leewheel 20260524 - forward decl (definition near file end)
+static void ApplyServiceBotDefaultAutoloot(Creature* bot);
+
 BotMgr::BotMgr(Player* const master) : _owner(master), _dpstracker(new DPSTracker())
 {
     _quickrecall = false;

@@ -19,6 +19,7 @@
 
 void AddSC_bot_random_equip_commands();
 void AddSC_mod_junk_to_gold();
+void AddSC_super_menu_commandscript();
 
 // The name of this function should match:
 // void Add${NameOfDirectory}Scripts()
@@ -26,4 +27,5 @@ void AddCustomScripts()
 {
     AddSC_bot_random_equip_commands(); // By leewheel 20260523
     AddSC_mod_junk_to_gold();
+    AddSC_super_menu_commandscript();
 }

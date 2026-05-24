@@ -1989,6 +1989,16 @@ void ScriptMgr::OnPlayerLootItem(Player* player, Item* item, uint32 count, Objec
     FOREACH_SCRIPT(PlayerScript)->OnLootItem(player, item, count, lootguid);
 }
 
+bool ScriptMgr::OnPlayerAddonMessage(Player* player, std::string_view message)
+{
+    FOR_SCRIPTS(PlayerScript, itr, end)
+    {
+        if (itr->second->OnAddonMessage(player, message))
+            return true;
+    }
+    return false;
+}
+
 void ScriptMgr::OnQuestObjectiveProgress(Player* player, Quest const* quest, uint32 objectiveIndex, uint16 progress)
 {
     FOREACH_SCRIPT(PlayerScript)->OnQuestObjectiveProgress(player, quest, objectiveIndex, progress);
@@ -2721,6 +2731,11 @@ void PlayerScript::OnMovieComplete(Player* /*player*/, uint32 /*movieId*/)
 
 void PlayerScript::OnLootItem(Player* /*player*/, Item* /*item*/, uint32 /*count*/, ObjectGuid /*lootguid*/)
 {
+}
+
+bool PlayerScript::OnAddonMessage(Player* /*player*/, std::string_view /*message*/)
+{
+    return false;
 }
 
 AccountScript::AccountScript(char const* name)
