@@ -42,6 +42,7 @@
 #include "Warden.h"
 #include "World.h"
 #include "WorldPacket.h"
+#include "bot_manager_addon.h"
 #include <algorithm>
 
 inline bool isNasty(uint8 c)
@@ -328,7 +329,15 @@ void WorldSession::HandleChatMessage(ChatMsg type, Language lang, std::string ms
                 sender->AddWhisperWhiteList(receiver->GetGUID());
 
             if (lang == LANG_ADDON)
+            {
+                if (receiver == sender)
+                {
+                    std::string_view addonBody = msg;
+                    if (BotManagerAddon::TryHandleIncoming(sender, addonBody))
+                        break;
+                }
                 GetPlayer()->WhisperAddon(msg, receiver);
+            }
             else
                 GetPlayer()->Whisper(msg, Language(lang), receiver);
             break;

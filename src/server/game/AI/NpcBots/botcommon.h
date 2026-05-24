@@ -41,6 +41,11 @@ enum NpcBotHireSource : uint8
 };
 // end By leewheel 20260523
 
+inline bool IsServiceHireSource(uint8 hireSource) // By leewheel 20260523
+{
+    return hireSource == NPCBOT_HIRE_QUICK_GROUP || hireSource == NPCBOT_HIRE_LFG;
+}
+
 enum BotCommonValues
 {
 //MISC

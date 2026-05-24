@@ -316,7 +316,7 @@ private:
     static void _loadConfig(bool reload)
     {
         _enableNpcBots                  = sConfigMgr->GetBoolDefault("NpcBot.Enable", true);
-        _logToDB                        = sConfigMgr->GetBoolDefault("NpcBot.LogToDB", true);
+        _logToDB                        = sConfigMgr->GetBoolDefault("NpcBot.LogToDB", false);
         _maxClassNpcBots                = sConfigMgr->GetIntDefault("NpcBot.MaxBotsPerClass", 1);
         _maxAccountNpcBots              = sConfigMgr->GetIntDefault("NpcBot.MaxBotsPerAccount", 0);
         _filterRaces                    = sConfigMgr->GetBoolDefault("NpcBot.Botgiver.FilterRaces", false);

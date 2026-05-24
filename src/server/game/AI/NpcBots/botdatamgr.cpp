@@ -3524,6 +3524,14 @@ void BotDataMgr::UpdateNpcBotData(uint32 entry, NpcBotDataUpdateType updateType,
         {
             Item** items = (Item**)(data);
 
+            // By leewheel 20260520 - service bots: in-memory only (no item_instance spam)
+            if (IsServiceHireSource(itr->second.hire_source))
+            {
+                for (uint8 k = BOT_SLOT_MAINHAND; k != BOT_INVENTORY_SIZE; ++k)
+                    itr->second.equips[k] = items[k] ? items[k]->GetGUID().GetCounter() : 0;
+                break;
+            }
+
             EquipmentInfo const* einfo = BotDataMgr::GetBotEquipmentInfo(entry);
 
             CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();

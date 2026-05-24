@@ -8,6 +8,7 @@
 #include "bot_InstanceEvents.h"
 #include "bot_GridNotifiers.h"
 #include "botconfig.h"
+#include "bot_manager_addon.h"
 #include "botdatamgr.h"
 #include "botlog.h"
 #include "botmgr.h"
@@ -8876,27 +8877,9 @@ bool bot_ai::OnGossipSelect(Player* player, Creature* creature/* == me*/, uint32
         }
         case GOSSIP_SENDER_EQUIPMENT_LIST: //list inventory
         {
-            //if (action - GOSSIP_ACTION_INFO_DEF != BOT_SLOT_NONE)
-            //    break;
-
-            EquipmentInfo const* einfo = BotDataMgr::GetBotEquipmentInfo(me->GetEntry());
-            for (auto slot : NPCBots::index_array<uint8, BOT_INVENTORY_SIZE>)
-            {
-                Item const* item = _equips[slot];
-                if (!item) continue;
-                std::ostringstream msg;
-                _AddItemLink(player, item, msg/*, false*/);
-                //uncomment if needed
-                //msg << " in slot " << uint32(i) << " (" << _getNameForSlot(i + 1) << ')';
-                if (slot <= BOT_SLOT_RANGED && einfo->ItemEntry[slot] == item->GetEntry())
-                    msg << " |cffe6cc80|h[!" << LocalizedNpcText(player, BOT_TEXT_VISUALONLY) << "!]|h|r";
-                BotWhisper(msg.view(), player);
-            }
-
-            std::ostringstream msg2;
-            msg2 << "GS: " << uint32(GetBotGearScores().first);
-            BotWhisper(msg2.view(), player);
-
+            // By leewheel 20260520 - sync to NPCBotInventory (BMU) instead of whisper spam
+            BotManagerAddon::SendBotSnapshot(player, me->GetEntry());
+            BotWhisper("[机器人管理] 装备数据已同步到插件，请使用 /bm 或右键「让我看看你的装备」打开界面。", player);
             break;
         }
         case GOSSIP_SENDER_EQUIP_TRANSMOGRIFY_MHAND:     //0 - 1 main hand
@@ -13404,6 +13387,9 @@ BotEquipResult bot_ai::_equip(uint8 slot, Item* newItem, ObjectGuid receiver, bo
 void bot_ai::_updateEquips(uint8 slot, Item* item)
 {
     _equips[slot] = item;
+    // By leewheel 20260520 - temp quick-group/LFG bots: memory only, skip heavy item_instance DB writes
+    if (IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(me->GetEntry())))
+        return;
     BotDataMgr::UpdateNpcBotData(me->GetEntry(), NPCBOT_UPDATE_EQUIPS, _equips.data());
 }
 //Called from gossip menu only (applies only to weapons)
@@ -14783,6 +14769,32 @@ BotEquipResult bot_ai::UnEquipAll(ObjectGuid receiver, bool store_to_bank)
     return suc;
 }
 
+// By leewheel 20260520 - used by client BMU addon (NPCBotInventory)
+BotEquipResult bot_ai::EquipItemFromPlayer(uint8 slot, Item* item)
+{
+    if (!item || !master)
+        return BotEquipResult::BOT_EQUIP_RESULT_FAIL_NO_ITEM;
+
+    if (slot >= BOT_INVENTORY_SIZE)
+        return BotEquipResult::BOT_EQUIP_RESULT_FAIL_CANT_EQUIP;
+
+    if (!_canEquip(item->GetTemplate(), slot, false, item))
+        return BotEquipResult::BOT_EQUIP_RESULT_FAIL_CANT_EQUIP;
+
+    return _equip(slot, item, master->GetGUID(), false);
+}
+
+BotEquipResult bot_ai::UnequipSlotToPlayer(uint8 slot)
+{
+    if (!master)
+        return BotEquipResult::BOT_EQUIP_RESULT_FAIL_NO_RECEIVER;
+
+    if (slot >= BOT_INVENTORY_SIZE)
+        return BotEquipResult::BOT_EQUIP_RESULT_FAIL_CANT_EQUIP;
+
+    return _unequip(slot, master->GetGUID(), false);
+}
+
 uint8 bot_ai::GetRealEquippedItemsCount() const
 {
     EquipmentInfo const* einfo = BotDataMgr::GetBotEquipmentInfo(me->GetEntry());
@@ -15187,8 +15199,16 @@ uint8 bot_ai::GetSpec() const
 
 void bot_ai::ApplyBotRandomEquip()
 {
-    InitRandomEquipWithQuality();
+    ApplyServiceRandomEquip();
 }
+
+// By leewheel 20260523 - best gear for temp service bots (quick group / LFG)
+void bot_ai::ApplyServiceRandomEquip()
+{
+    InitRandomEquipWithQuality();
+    RefreshEquipsAfterGenerate();
+}
+// end By leewheel 20260523
 
 void bot_ai::InitRandomEquipWithQuality()
 {
@@ -15226,8 +15246,71 @@ void bot_ai::InitRandomEquipWithQuality()
             BotDataMgr::GenerateWanderingBotItemEnchants(item, i, GetSpec());
     }
 
-    BotDataMgr::UpdateNpcBotData(me->GetEntry(), NPCBOT_UPDATE_EQUIPS, _equips.data());
+    if (!IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(me->GetEntry())))
+        BotDataMgr::UpdateNpcBotData(me->GetEntry(), NPCBOT_UPDATE_EQUIPS, _equips.data());
 }
+
+// By leewheel 20260523 - apply visuals/stats after InitRandomEquipWithQuality
+void bot_ai::RefreshEquipsAfterGenerate()
+{
+    EquipmentInfo const* einfo = BotDataMgr::GetBotEquipmentInfo(me->GetEntry());
+    if (!einfo)
+        return;
+
+    for (uint8 i = 0; i < BOT_INVENTORY_SIZE; ++i)
+        RemoveItemBonuses(i);
+
+    for (auto i : NPCBots::index_array<uint8, BOT_FIRST_NON_WEAPON_SLOT>)
+    {
+        if (CanChangeEquip(i) && _equips[i])
+            me->SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID + i, _equips[i]->GetEntry());
+        else if (einfo->ItemEntry[i])
+            me->SetUInt32Value(UNIT_VIRTUAL_ITEM_SLOT_ID + i, einfo->ItemEntry[i]);
+    }
+
+    if (Item const* MH = _equips[BOT_SLOT_MAINHAND])
+    {
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(MH->GetEntry()))
+        {
+            if (RespectEquipsAttackTime())
+                me->SetAttackTime(BASE_ATTACK, proto->Delay);
+            ApplyItemBonuses(BOT_SLOT_MAINHAND);
+        }
+    }
+    if (Item const* OH = _equips[BOT_SLOT_OFFHAND])
+    {
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(OH->GetEntry()))
+        {
+            ApplyItemBonuses(BOT_SLOT_OFFHAND);
+            if (proto->Class == ITEM_CLASS_WEAPON)
+            {
+                if (RespectEquipsAttackTime())
+                    me->SetAttackTime(OFF_ATTACK, proto->Delay);
+                me->SetCanDualWield(true);
+            }
+            else if (proto->Class == ITEM_CLASS_ARMOR && proto->SubClass == ITEM_SUBCLASS_ARMOR_SHIELD)
+            {
+                if (me->GetCreatureTemplate()->flags_extra & CREATURE_FLAG_EXTRA_NO_BLOCK)
+                    const_cast<CreatureTemplate*>(me->GetCreatureTemplate())->flags_extra &= ~CREATURE_FLAG_EXTRA_NO_BLOCK;
+            }
+        }
+    }
+    if (Item const* RH = _equips[BOT_SLOT_RANGED])
+    {
+        if (ItemTemplate const* proto = sObjectMgr->GetItemTemplate(RH->GetEntry()))
+        {
+            if (proto->Class == ITEM_CLASS_WEAPON && RespectEquipsAttackTime())
+                me->SetAttackTime(RANGED_ATTACK, proto->Delay);
+            ApplyItemBonuses(BOT_SLOT_RANGED);
+        }
+    }
+
+    for (uint8 i = BOT_SLOT_RANGED + 1; i != BOT_INVENTORY_SIZE; ++i)
+        ApplyItemBonuses(i);
+
+    ApplyItemSetBonuses(nullptr, true);
+}
+// end By leewheel 20260523
 
 void bot_ai::DestroyServiceEquips()
 {

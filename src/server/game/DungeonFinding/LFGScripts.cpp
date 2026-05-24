@@ -32,6 +32,8 @@
 #include "WorldSession.h"
 
 //npcbot
+#include "bot_ai.h"
+#include "botcommon.h"
 #include "botconfig.h"
 #include "botdatamgr.h"
 #include "botmgr.h"
@@ -115,7 +117,20 @@ void LFGPlayerScript::OnMapChanged(Player* player)
         //npcbot
         if (group->GetLeaderGUID() == player->GetGUID() && group->GetMembersCount() < MAX_GROUP_SIZE &&
             BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
+        {
             BotDataMgr::GenerateDungeonBots(player, group, map);
+            // By leewheel 20260523 - ensure LFG fill-in bots have best gear after spawn (no command needed)
+            for (GroupBotReference* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
+            {
+                Creature* bot = itr->GetSource();
+                if (!bot || !bot->IsNPCBot() || !bot->GetBotAI())
+                    continue;
+                if (!IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
+                    continue;
+                bot->GetBotAI()->ApplyServiceRandomEquip();
+            }
+            // end By leewheel 20260523
+        }
         //end npcbot
 
         if (sLFGMgr->selectedRandomLfgDungeon(player->GetGUID()))

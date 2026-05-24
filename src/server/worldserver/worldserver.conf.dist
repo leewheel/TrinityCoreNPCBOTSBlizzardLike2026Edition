@@ -466,7 +466,8 @@ MaxCoreStuckTime = 60
 #
 #    AddonChannel
 #        Description: Configure the use of the addon channel through the server (some client side
-#                     addons will not work correctly with disabled addon channel)
+#                     addons will not work correctly with disabled addon channel).
+#                     Required for NPCBotInventory (BMU whisper addon messages).
 #        Default:     1 - (Enabled)
 #                     0 - (Disabled)
 
@@ -3980,7 +3981,7 @@ Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors
 Logger.sql.updates=3,Console Server
 Logger.mmaps=3,Server
-Logger.npcbots=2,NpcBots Server
+Logger.npcbots=4,NpcBots
 Logger.botwperror=3,BotWpError
 
 #Logger.achievement=3,Console Server
@@ -4183,11 +4184,12 @@ NpcBot.Enable = 1
 
 #
 #    NpcBot.LogToDB
-#        Description: Log bot events debug info to DB. Records will be kept up to 30 days
-#        Default:     1 - (Enable)
-#                     0 - (Disable)
+#        Description: Log bot events debug info to DB. Records will be kept up to 30 days.
+#                     Generates heavy MySQL/disk I/O (teleport/equip per bot). Disable on live servers.
+#        Default:     0 - (Disable)
+#                     1 - (Enable, debug only)
 
-NpcBot.LogToDB = 1
+NpcBot.LogToDB = 0
 
 #
 #    NpcBot.MaxBots

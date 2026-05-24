@@ -790,6 +790,11 @@ void BotMgr::RemoveBot(ObjectGuid guid, uint8 removetype)
 
     if (bot->IsSummon() && !bot->GetBotAI()->IsTempBot())
     {
+        // By leewheel 20260523 - LFG dungeon bot cleanup (summon path skips CleanupsBeforeBotDelete)
+        if (IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
+            bot->GetBotAI()->DestroyServiceEquips();
+        // end By leewheel 20260523
+
         RemoveBotFromBGQueue(bot);
         RemoveBotFromGroup(bot);
         bot->SetCreator(nullptr);
@@ -830,7 +835,7 @@ void BotMgr::RemoveBot(ObjectGuid guid, uint8 removetype)
     // By leewheel 20260523
     if (resetType == BOTAI_RESET_DISMISS)
     {
-        if (BotDataMgr::GetNpcBotHireSource(bot->GetEntry()) == NPCBOT_HIRE_QUICK_GROUP)
+        if (IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
             bot->GetBotAI()->DestroyServiceEquips();
 
         BotDataMgr::ResetNpcBotTransmogData(bot->GetEntry(), false);
@@ -860,17 +865,22 @@ BotAddResult BotMgr::RebindBot(Creature* bot)
     return res;
 }
 
+// By leewheel 20260523 - LFG dungeon finder temp bot
 BotAddResult BotMgr::AddDungeonBot(Creature* bot)
 {
     BotAddResult add_res = AddBot(bot);
     if (add_res != BOT_ADD_SUCCESS)
         return add_res;
 
+    BotDataMgr::SetNpcBotHireSource(bot->GetEntry(), NPCBOT_HIRE_LFG);
+    bot->GetBotAI()->ApplyServiceRandomEquip(); // By leewheel 20260523 - auto best gear on LFG join
+
     uint32 lfg_roles = BotDataMgr::BotToLFGRoles(bot->GetBotAI()->GetBotRoles());
     _owner->GetGroup()->SetLfgRoles(bot->GetGUID(), lfg_roles);
 
     return BOT_ADD_SUCCESS;
 }
+// end By leewheel 20260523
 
 BotAddResult BotMgr::AddBot(Creature* bot)
 {
@@ -2216,7 +2226,7 @@ BotAddResult BotMgr::AddServiceBot(Creature* bot, uint32 botRole)
 
     BotDataMgr::SetNpcBotHireSource(bot->GetEntry(), NPCBOT_HIRE_QUICK_GROUP);
     SetRandomBotTalentsForGroup(bot, botRole);
-    bot->GetBotAI()->InitRandomEquipWithQuality();
+    bot->GetBotAI()->ApplyServiceRandomEquip();
 
     return BOT_ADD_SUCCESS;
 }

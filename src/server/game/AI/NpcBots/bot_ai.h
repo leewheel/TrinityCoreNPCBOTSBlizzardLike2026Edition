@@ -290,6 +290,8 @@ public:
     Item* GetEquipsByGuid(ObjectGuid itemGuid) const;
     uint32 GetEquipDisplayId(uint8 slot) const;
     [[nodiscard]] BotEquipResult UnEquipAll(ObjectGuid receiver, bool store_to_bank);
+    [[nodiscard]] BotEquipResult EquipItemFromPlayer(uint8 slot, Item* item); // By leewheel 20260520 - BMU addon
+    [[nodiscard]] BotEquipResult UnequipSlotToPlayer(uint8 slot); // By leewheel 20260520 - BMU addon
     uint8 GetRealEquippedItemsCount() const;
     bool HasRealEquipment() const { return !!GetRealEquippedItemsCount(); }
     float GetAverageItemLevel() const;
@@ -337,6 +339,8 @@ public:
     uint8 GetSpec() const;
     void ApplyBotRandomEquip();
     void InitRandomEquipWithQuality();
+    void RefreshEquipsAfterGenerate(); // By leewheel 20260523
+    void ApplyServiceRandomEquip(); // By leewheel 20260523 - quick group / LFG temp bots
     void DestroyServiceEquips();
 
     AoeSpotsVec const& GetAoeSpots() const;
