@@ -12,7 +12,6 @@
 #include "CreatureData.h"
 #include "Item.h"
 #include "DBCStores.h"
-#include "DatabaseEnv.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "Util.h"
@@ -21,6 +20,7 @@
 #include "botcommon.h"
 #include "botdatamgr.h"
 #include "botmgr.h"
+#include "Log.h"
 
 #include <sstream>
 #include <unordered_map>
@@ -93,8 +93,9 @@ namespace
 
     void SendBMU(Player* player, std::string const& payload)
     {
+        // 3.3.5 客户端 CHAT_MSG_ADDON：arg1=前缀，arg2=正文（BMU\tpayload，勿用 \tBMU\t）
         WorldPackets::Chat::Chat packet;
-        packet.Initialize(CHAT_MSG_WHISPER, LANG_ADDON, player, player, payload, 0, "", LOCALE_enUS, std::string(BotManagerAddon::PREFIX));
+        packet.Initialize(CHAT_MSG_WHISPER, LANG_ADDON, player, player, payload, 0, "", DEFAULT_LOCALE, std::string(BotManagerAddon::PREFIX));
         player->SendDirectMessage(packet.Write());
     }
 
@@ -158,7 +159,7 @@ namespace
         if (itr != instanceMap.end())
             return itr->second;
 
-        return itemGuid;
+        return 0;
     }
 
     void CollectItemGuids(NpcBotData const* data, std::vector<uint32>& guids)
@@ -173,84 +174,110 @@ namespace
         }
     }
 
-    std::unordered_map<uint32, uint32> LoadItemInstanceMap(std::vector<uint32> const& guids)
+    void SendBotStatsPacket(Player* player, NpcBotStats const& stats)
     {
-        std::unordered_map<uint32, uint32> instanceMap;
-        if (guids.empty())
-            return instanceMap;
-
         std::ostringstream ss;
-        for (size_t i = 0; i < guids.size(); ++i)
-        {
-            if (i)
-                ss << ',';
-            ss << guids[i];
-        }
-
-        if (QueryResult result = CharacterDatabase.PQuery("SELECT guid, itemEntry FROM item_instance WHERE guid IN (%s)", ss.str().c_str()))
-        {
-            do
-            {
-                Field* fields = result->Fetch();
-                instanceMap.emplace(fields[0].GetUInt32(), fields[1].GetUInt32());
-            } while (result->NextRow());
-        }
-
-        return instanceMap;
-    }
-
-    void SendBotStats(Player* player, uint32 entry)
-    {
-        QueryResult result = CharacterDatabase.PQuery(
-            "SELECT entry, maxhealth, maxpower, strength, agility, stamina, intellect, spirit, armor, defense, "
-            "resHoly, resFire, resNature, resFrost, resShadow, resArcane, blockPct, dodgePct, parryPct, critPct, "
-            "attackPower, spellPower, spellPen, hastePct, hitBonusPct, expertise, armorPenPct "
-            "FROM characters_npcbot_stats WHERE entry = %u", entry);
-
-        if (!result)
-            return;
-
-        Field* fields = result->Fetch();
-        std::ostringstream ss;
-        ss << "S;" << entry
-           << ';' << fields[1].GetUInt32()  // hp
-           << ';' << fields[2].GetUInt32()  // mp
-           << ';' << fields[3].GetUInt32()  // str
-           << ';' << fields[4].GetUInt32()  // agi
-           << ';' << fields[5].GetUInt32()  // sta
-           << ';' << fields[6].GetUInt32()  // int
-           << ';' << fields[7].GetUInt32()  // spi
-           << ';' << fields[8].GetUInt32()  // armor
-           << ';' << fields[9].GetUInt32()  // def
-           << ';' << fields[10].GetUInt32() // resHoly
-           << ';' << fields[11].GetUInt32() // resFire
-           << ';' << fields[12].GetUInt32() // resNature
-           << ';' << fields[13].GetUInt32() // resFrost
-           << ';' << fields[14].GetUInt32() // resShadow
-           << ';' << fields[15].GetUInt32() // resArcane
-           << ';' << fields[16].GetFloat()  // block
-           << ';' << fields[17].GetFloat()  // dodge
-           << ';' << fields[18].GetFloat()  // parry
-           << ';' << fields[19].GetFloat()  // crit
-           << ';' << fields[20].GetUInt32() // ap
-           << ';' << fields[21].GetUInt32() // sp
-           << ';' << fields[22].GetUInt32() // spellPen
-           << ';' << fields[23].GetFloat()  // haste
-           << ';' << fields[24].GetFloat()  // hit
-           << ';' << fields[25].GetUInt32() // expertise
-           << ';' << fields[26].GetFloat(); // arpen
+        ss << "S;" << stats.entry
+           << ';' << stats.maxhealth
+           << ';' << stats.maxpower
+           << ';' << stats.strength
+           << ';' << stats.agility
+           << ';' << stats.stamina
+           << ';' << stats.intellect
+           << ';' << stats.spirit
+           << ';' << stats.armor
+           << ';' << stats.defense
+           << ';' << stats.resHoly
+           << ';' << stats.resFire
+           << ';' << stats.resNature
+           << ';' << stats.resFrost
+           << ';' << stats.resShadow
+           << ';' << stats.resArcane
+           << ';' << stats.blockPct
+           << ';' << stats.dodgePct
+           << ';' << stats.parryPct
+           << ';' << stats.critPct
+           << ';' << stats.attackPower
+           << ';' << stats.spellPower
+           << ';' << stats.spellPen
+           << ';' << stats.hastePct
+           << ';' << stats.hitBonusPct
+           << ';' << stats.expertise
+           << ';' << stats.armorPenPct;
 
         SendBMU(player, ss.str());
     }
 
+    void TrySendBotStats(Player* player, uint32 entry)
+    {
+        Creature const* bot = BotDataMgr::FindBot(entry);
+        if (!bot || !bot->IsInWorld() || !bot->GetBotAI())
+            return;
+
+        NpcBotStats stats{};
+        bot->GetBotAI()->FillNpcBotStats(stats);
+        SendBotStatsPacket(player, stats);
+    }
+
+    void AppendItemExtraFields(std::ostringstream& ss, Item const* item)
+    {
+        if (!item)
+        {
+            ss << ";0;0;0;0;0;0;0";
+            return;
+        }
+
+        ss << ';' << item->GetEnchantmentId(EnchantmentSlot::PERM_ENCHANTMENT_SLOT);
+
+        uint32 gem1 = 0;
+        uint32 gem2 = 0;
+        uint32 gem3 = 0;
+        for (uint32 sock = SOCK_ENCHANTMENT_SLOT; sock < SOCK_ENCHANTMENT_SLOT + MAX_ITEM_PROTO_SOCKETS; ++sock)
+        {
+            uint32 const enchantId = item->GetEnchantmentId(EnchantmentSlot(sock));
+            switch (sock - SOCK_ENCHANTMENT_SLOT)
+            {
+                case 0: gem1 = enchantId; break;
+                case 1: gem2 = enchantId; break;
+                case 2: gem3 = enchantId; break;
+                default: break;
+            }
+        }
+
+        ss << ';' << gem1 << ';' << gem2 << ';' << gem3 << ";0";
+        ss << ';' << item->GetItemRandomPropertyId();
+        ss << ';' << item->GetItemSuffixFactor();
+    }
+
+    void SendGearSlotPacket(Player* player, uint32 entry, uint8 slot, Item const* item, uint32 fallbackEntry = 0)
+    {
+        uint32 const itemEntry = item ? item->GetEntry() : fallbackEntry;
+        std::ostringstream ss;
+        ss << "G;" << entry << ';' << SLOT_KEYS[slot] << ';' << itemEntry;
+        AppendItemExtraFields(ss, item);
+        SendBMU(player, ss.str());
+    }
+
+    void SendGearFromLiveBot(Player* player, uint32 entry, Creature const* bot)
+    {
+        bot_ai const* ai = bot->GetBotAI();
+        if (!ai)
+            return;
+
+        for (uint8 slot = 0; slot < BOT_INVENTORY_SIZE; ++slot)
+            SendGearSlotPacket(player, entry, slot, ai->GetEquips(slot));
+    }
+
     void SendBotGear(Player* player, uint32 entry, NpcBotData const* data, std::unordered_map<uint32, uint32> const& instanceMap)
     {
+        Creature const* bot = BotDataMgr::FindBot(entry);
+        bot_ai const* ai = bot && bot->IsInWorld() ? bot->GetBotAI() : nullptr;
+
         for (uint8 slot = 0; slot < BOT_INVENTORY_SIZE; ++slot)
         {
-            uint32 const itemEntry = ResolveItemEntry(data->equips[slot], instanceMap);
-            std::ostringstream ss;
-            ss << "G;" << entry << ';' << SLOT_KEYS[slot] << ';' << itemEntry;
-            SendBMU(player, ss.str());
+            Item const* item = ai ? ai->GetEquips(slot) : nullptr;
+            uint32 const fallbackEntry = ResolveItemEntry(data->equips[slot], instanceMap);
+            SendGearSlotPacket(player, entry, slot, item, fallbackEntry);
         }
     }
 
@@ -297,13 +324,20 @@ namespace
         if (!data || !PlayerOwnsBot(player, entry))
             return;
 
-        std::vector<uint32> guids;
-        CollectItemGuids(data, guids);
-        std::unordered_map<uint32, uint32> instanceMap = LoadItemInstanceMap(guids);
-
         SendBotMeta(player, entry, data);
-        SendBotGear(player, entry, data, instanceMap);
-        SendBotStats(player, entry);
+
+        if (Creature const* bot = BotDataMgr::FindBot(entry))
+        {
+            if (bot->IsInWorld() && bot->GetBotAI())
+            {
+                SendGearFromLiveBot(player, entry, bot);
+                TrySendBotStats(player, entry);
+                return;
+            }
+        }
+
+        std::unordered_map<uint32, uint32> const emptyMap;
+        SendBotGear(player, entry, data, emptyMap);
     }
 
     void SendOwnedBots(Player* player, std::vector<uint32> const& entries)
@@ -314,7 +348,8 @@ namespace
             return;
         }
 
-        std::vector<uint32> allGuids;
+        std::unordered_map<uint32, uint32> const emptyMap;
+
         for (uint32 entry : entries)
         {
             NpcBotData const* data = BotDataMgr::SelectNpcBotData(entry);
@@ -322,19 +357,18 @@ namespace
                 continue;
 
             SendBotMeta(player, entry, data);
-            CollectItemGuids(data, allGuids);
-        }
 
-        std::unordered_map<uint32, uint32> instanceMap = LoadItemInstanceMap(allGuids);
+            if (Creature const* bot = BotDataMgr::FindBot(entry))
+            {
+                if (bot->IsInWorld() && bot->GetBotAI())
+                {
+                    SendGearFromLiveBot(player, entry, bot);
+                    TrySendBotStats(player, entry);
+                    continue;
+                }
+            }
 
-        for (uint32 entry : entries)
-        {
-            NpcBotData const* data = BotDataMgr::SelectNpcBotData(entry);
-            if (!data || !PlayerOwnsBot(player, entry))
-                continue;
-
-            SendBotGear(player, entry, data, instanceMap);
-            SendBotStats(player, entry);
+            SendBotGear(player, entry, data, emptyMap);
         }
 
         SendBMU(player, "E;END");
@@ -343,15 +377,10 @@ namespace
     std::vector<uint32> LoadOwnedBotEntries(Player const* player)
     {
         std::vector<uint32> entries;
-        uint32 const ownerLow = player->GetGUID().GetCounter();
+        if (!player)
+            return entries;
 
-        if (QueryResult result = CharacterDatabase.PQuery("SELECT entry FROM characters_npcbot WHERE owner = %u", ownerLow))
-        {
-            do
-                entries.push_back(result->Fetch()[0].GetUInt32());
-            while (result->NextRow());
-        }
-
+        BotDataMgr::CollectOwnedBotEntries(player->GetGUID().GetCounter(), true, entries);
         return entries;
     }
 
@@ -365,7 +394,41 @@ namespace
 
     void HandleRefresh(Player* player)
     {
-        SendOwnedBots(player, LoadOwnedBotEntries(player));
+        std::vector<uint32> entries = LoadOwnedBotEntries(player);
+        BOT_LOG_INFO("npcbots", "BMU REFRESH: player '{}' guid {} owned bots {}",
+            player->GetName(), player->GetGUID().GetCounter(), entries.size());
+
+        if (entries.empty())
+        {
+            ChatHandler(player->GetSession()).SendSysMessage("[机器人管理] 未找到属于你的机器人，请先雇佣或召唤机器人。");
+            SendBMU(player, "E;END");
+            return;
+        }
+
+        for (uint32 entry : entries)
+        {
+            NpcBotData const* data = BotDataMgr::SelectNpcBotData(entry);
+            Creature const* bot = BotDataMgr::FindBot(entry);
+            bool const live = bot && bot->IsInWorld() && bot->GetBotAI();
+            uint32 gearNonZero = 0;
+            if (live)
+            {
+                for (uint8 slot = 0; slot < BOT_INVENTORY_SIZE; ++slot)
+                    if (bot->GetBotAI()->GetEquips(slot))
+                        ++gearNonZero;
+            }
+            else if (data)
+            {
+                for (uint32 itemGuid : data->equips)
+                    if (itemGuid)
+                        ++gearNonZero;
+            }
+
+            BOT_LOG_INFO("npcbots", "BMU   bot entry {} owner={} live={} gearSlots={}",
+                entry, data ? data->owner : 0u, live, gearNonZero);
+        }
+
+        SendOwnedBots(player, std::move(entries));
     }
 
     void HandleQuery(Player* player, uint32 entry)
@@ -524,6 +587,7 @@ bool BotManagerAddon::TryHandleIncoming(Player* player, std::string_view message
     if (!player)
         return false;
 
+    std::string_view const raw = message;
     if (!TryStripAddonPrefix(message, PREFIX))
         return false;
 
@@ -532,6 +596,8 @@ bool BotManagerAddon::TryHandleIncoming(Player* player, std::string_view message
         return true;
 
     std::string_view const cmd = parts[0];
+    BOT_LOG_INFO("npcbots", "BMU IN: player '{}' cmd='{}' raw='{}'",
+        player->GetName(), cmd, raw.substr(0, std::min<size_t>(raw.size(), 64)));
 
     if (cmd == "REFRESH")
         HandleRefresh(player);

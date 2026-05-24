@@ -3908,6 +3908,18 @@ uint8 BotDataMgr::GetOwnedBotsCount(ObjectGuid owner_guid, uint32 class_mask, bo
     return count;
 }
 
+void BotDataMgr::CollectOwnedBotEntries(uint32 ownerLowGuid, bool includeShared, std::vector<uint32>& entries)
+{
+    entries.clear();
+    std::shared_lock lock(*GetLock());
+    entries.reserve(_botsData.size());
+    for (auto const& [entry, bot_data] : _botsData)
+    {
+        if (bot_data.owner == ownerLowGuid || (includeShared && bot_data.shared_owners.contains(ownerLowGuid)))
+            entries.push_back(entry);
+    }
+}
+
 uint8 BotDataMgr::GetAccountBotsCount(uint32 account_id)
 {
     CharacterDatabasePreparedStatement* stmt = CharacterDatabase.GetPreparedStatement(CHAR_SEL_NPCBOT_ACC_BOT_COUNT);

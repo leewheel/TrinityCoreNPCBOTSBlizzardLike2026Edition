@@ -247,6 +247,7 @@ public:
     static ObjectGuid GetNPCBotGuid(uint32 entry);
     static std::vector<uint32> GetExistingNPCBotIds();
     static uint8 GetOwnedBotsCount(ObjectGuid owner_guid, uint32 class_mask = 0, bool count_shared = false);
+    static void CollectOwnedBotEntries(uint32 ownerLowGuid, bool includeShared, std::vector<uint32>& entries);
     static uint8 GetAccountBotsCount(uint32 account_id);
 
     static void DespawnDungeonBot(uint32 entry);

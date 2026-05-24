@@ -8877,9 +8877,9 @@ bool bot_ai::OnGossipSelect(Player* player, Creature* creature/* == me*/, uint32
         }
         case GOSSIP_SENDER_EQUIPMENT_LIST: //list inventory
         {
-            // By leewheel 20260520 - sync to NPCBotInventory (BMU) instead of whisper spam
+            // By leewheel 20260520 - push BMU data; open UI with /bm or right-click menu
             BotManagerAddon::SendBotSnapshot(player, me->GetEntry());
-            BotWhisper("[机器人管理] 装备数据已同步到插件，请使用 /bm 或右键「让我看看你的装备」打开界面。", player);
+            BotWhisper("[机器人管理] 装备已同步。请使用 /bm 或右键机器人「让我看看你的装备」打开界面。", player);
             break;
         }
         case GOSSIP_SENDER_EQUIP_TRANSMOGRIFY_MHAND:     //0 - 1 main hand
@@ -14606,38 +14606,41 @@ float bot_ai::_getItemGearStatScore(ItemTemplate const* iproto, uint8 forslot, I
     return itemScore;
 }
 
+void bot_ai::FillNpcBotStats(NpcBotStats& stats) const
+{
+    stats.entry = me->GetEntry();
+    stats.maxhealth = me->GetMaxHealth();
+    stats.maxpower = me->GetMaxPower(_botclass == BOT_CLASS_DRUID ? POWER_MANA : me->GetPowerType());
+    stats.strength = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_STRENGTH));
+    stats.agility = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_AGILITY));
+    stats.stamina = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_STAMINA));
+    stats.intellect = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_INTELLECT));
+    stats.spirit = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_SPIRIT));
+    stats.armor = me->GetArmor();
+    stats.defense = me->GetDefenseSkillValue();
+    stats.resHoly = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_HOLY) + resistbonus[SPELL_SCHOOL_HOLY - 1]));
+    stats.resFire = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_FIRE) + resistbonus[SPELL_SCHOOL_FIRE - 1]));
+    stats.resNature = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_NATURE) + resistbonus[SPELL_SCHOOL_NATURE - 1]));
+    stats.resFrost = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_FROST) + resistbonus[SPELL_SCHOOL_FROST - 1]));
+    stats.resShadow = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_SHADOW) + resistbonus[SPELL_SCHOOL_SHADOW - 1]));
+    stats.resArcane = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_ARCANE) + resistbonus[SPELL_SCHOOL_ARCANE - 1]));
+    stats.blockPct = me->GetUnitBlockChance(BASE_ATTACK, me);
+    stats.dodgePct = me->GetUnitDodgeChance(BASE_ATTACK, me);
+    stats.parryPct = me->GetUnitParryChance(BASE_ATTACK, me);
+    stats.critPct = crit + me->GetTotalAuraModifier(SPELL_AURA_MOD_WEAPON_CRIT_PERCENT) + me->GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_PCT);
+    stats.attackPower = static_cast<uint32>(0.5f + me->GetTotalAttackPowerValue(BASE_ATTACK));
+    stats.spellPower = static_cast<uint32>(std::max<int32>(0, me->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_MAGIC)));
+    stats.spellPen = spellpen;
+    stats.hastePct = std::max<float>(haste, 0.f);
+    stats.hitBonusPct = std::max<float>(hit, 0.f);
+    stats.expertise = expertise;
+    stats.armorPenPct = me->GetCreatureArmorPenetrationCoef();
+}
+
 void bot_ai::_saveStats()
 {
-    NpcBotStats stats{
-        .entry = me->GetEntry(),
-        .maxhealth = me->GetMaxHealth(),
-        .maxpower = me->GetMaxPower(_botclass == BOT_CLASS_DRUID ? POWER_MANA : me->GetPowerType()),
-        .strength = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_STRENGTH)),
-        .agility = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_AGILITY)),
-        .stamina = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_STAMINA)),
-        .intellect = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_INTELLECT)),
-        .spirit = static_cast<uint32>(0.5f + GetTotalBotStat(BOT_STAT_MOD_SPIRIT)),
-        .armor = me->GetArmor(),
-        .defense = me->GetDefenseSkillValue(),
-        .resHoly = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_HOLY) + resistbonus[SPELL_SCHOOL_HOLY-1])),
-        .resFire = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_FIRE) + resistbonus[SPELL_SCHOOL_FIRE-1])),
-        .resNature = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_NATURE) + resistbonus[SPELL_SCHOOL_NATURE-1])),
-        .resFrost = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_FROST) + resistbonus[SPELL_SCHOOL_FROST-1])),
-        .resShadow = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_SHADOW) + resistbonus[SPELL_SCHOOL_SHADOW-1])),
-        .resArcane = static_cast<uint32>(std::max<int32>(0, me->GetResistance(SPELL_SCHOOL_ARCANE) + resistbonus[SPELL_SCHOOL_ARCANE-1])),
-        .blockPct = me->GetUnitBlockChance(BASE_ATTACK, me),
-        .dodgePct = me->GetUnitDodgeChance(BASE_ATTACK, me),
-        .parryPct = me->GetUnitParryChance(BASE_ATTACK, me),
-        .critPct = crit + me->GetTotalAuraModifier(SPELL_AURA_MOD_WEAPON_CRIT_PERCENT) + me->GetTotalAuraModifier(SPELL_AURA_MOD_CRIT_PCT),
-        .attackPower = static_cast<uint32>(0.5f + me->GetTotalAttackPowerValue(BASE_ATTACK)),
-        .spellPower = static_cast<uint32>(std::max<int32>(0, me->SpellBaseDamageBonusDone(SPELL_SCHOOL_MASK_MAGIC))),
-        .spellPen = spellpen,
-        .hastePct = std::max<float>(haste, 0.f),
-        .hitBonusPct = std::max<float>(hit, 0.f),
-        .expertise = expertise,
-        .armorPenPct = me->GetCreatureArmorPenetrationCoef()
-    };
-
+    NpcBotStats stats{};
+    FillNpcBotStats(stats);
     BotDataMgr::SaveNpcBotStats(stats);
 }
 

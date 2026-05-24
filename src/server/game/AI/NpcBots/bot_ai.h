@@ -19,6 +19,7 @@ NpcBot System by Trickerer (onlysuffering@gmail.com)
 class TeleportHomeEvent;
 class TeleportFinishEvent;
 class AwaitStateRemovalEvent;
+struct NpcBotStats;
 
 enum CombatRating : uint8;
 enum EnchantmentSlot : uint16;
@@ -292,6 +293,7 @@ public:
     [[nodiscard]] BotEquipResult UnEquipAll(ObjectGuid receiver, bool store_to_bank);
     [[nodiscard]] BotEquipResult EquipItemFromPlayer(uint8 slot, Item* item); // By leewheel 20260520 - BMU addon
     [[nodiscard]] BotEquipResult UnequipSlotToPlayer(uint8 slot); // By leewheel 20260520 - BMU addon
+    void FillNpcBotStats(NpcBotStats& stats) const; // By leewheel 20260520 - BMU addon (no DB read)
     uint8 GetRealEquippedItemsCount() const;
     bool HasRealEquipment() const { return !!GetRealEquippedItemsCount(); }
     float GetAverageItemLevel() const;

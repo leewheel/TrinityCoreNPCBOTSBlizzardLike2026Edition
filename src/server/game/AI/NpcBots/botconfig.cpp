@@ -63,7 +63,7 @@ static uint32 _targetBGPlayersPerTeamCount_SA;
 static uint32 _targetBGPlayersPerTeamCount_IC;
 static uint32 _shared_ownership_options;
 static bool _enableNpcBots;
-static bool _logToDB;
+static bool _logToDB = false; // live default: off (heavy DB I/O); override via NpcBot.LogToDB in worldserver.conf
 static bool _xpReductionEnable;
 static bool _xpReductionGroupOnly;
 static bool _honorReductionEnable;
