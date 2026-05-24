@@ -4124,6 +4124,11 @@ uint32 BotDataMgr::DefaultRolesForClass(uint8 m_class, uint8 spec)
     return roleMask;
 }
 
+uint32 BotDataMgr::GetDefaultAutolootRoleMask()
+{
+    return BOT_ROLE_AUTOLOOT | BOT_ROLE_MASK_LOOTING;
+}
+
 uint32 BotDataMgr::GetViableRolesForClass(uint8 bot_class)
 {
     uint32 roles;

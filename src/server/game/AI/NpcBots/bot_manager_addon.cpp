@@ -308,12 +308,16 @@ namespace
                 className.resize(className.size() - 4);
         }
 
+        if (className.empty())
+            className = "Bot";
+
         if (NpcBotAppearanceData const* appearance = BotDataMgr::SelectNpcBotAppearance(entry))
             gender = appearance->gender;
 
         std::ostringstream ss;
         ss << "B;" << entry << ';' << EscapeAddonField(botName) << ';' << data->roles << ';' << EscapeAddonField(className)
-           << ';' << displayId << ';' << race << ';' << uint32(gender) << ';' << player->GetLevel() << ';' << uint32(data->spec);
+           << ';' << displayId << ';' << race << ';' << uint32(gender)
+           << ';' << uint32(player->GetLevel()) << ';' << uint32(data->spec);
 
         SendBMU(player, ss.str());
     }

@@ -723,6 +723,9 @@ class TC_GAME_API PlayerScript : public ScriptObject
         // Called when a player completes a movie
         virtual void OnMovieComplete(Player* player, uint32 movieId);
 
+        // Called when a player loots an item into inventory
+        virtual void OnLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid);
+
 };
 
 class TC_GAME_API AccountScript : public ScriptObject
@@ -1038,6 +1041,7 @@ class TC_GAME_API ScriptMgr
         void OnQuestStatusChange(Player* player, uint32 questId);
         void OnMovieComplete(Player* player, uint32 movieId);
         void OnPlayerRepop(Player* player);
+        void OnPlayerLootItem(Player* player, Item* item, uint32 count, ObjectGuid lootguid);
 
     public: /* AccountScript */
 

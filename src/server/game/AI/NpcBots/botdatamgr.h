@@ -279,6 +279,7 @@ public:
     static uint32 LFGToBotRoles(uint8 roles_mask);
     static uint8 BotToLFGRoles(uint32 roles_mask, bool first_in_mask = true);
     static uint32 DefaultRolesForClass(uint8 m_class, uint8 spec);
+    static uint32 GetDefaultAutolootRoleMask();
     static uint32 GetViableRolesForClass(uint8 bot_class);
     static uint8 SelectBotSpecForRoles(uint8 bot_class, uint32 bot_role);
     static uint8 SelectSpecForClass(uint8 m_class);

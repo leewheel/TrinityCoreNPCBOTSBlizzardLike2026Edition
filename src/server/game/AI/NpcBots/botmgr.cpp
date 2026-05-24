@@ -874,6 +874,7 @@ BotAddResult BotMgr::AddDungeonBot(Creature* bot)
 
     BotDataMgr::SetNpcBotHireSource(bot->GetEntry(), NPCBOT_HIRE_LFG);
     bot->GetBotAI()->ApplyServiceRandomEquip(); // By leewheel 20260523 - auto best gear on LFG join
+    ApplyServiceBotDefaultAutoloot(bot); // By leewheel 20260524 - autoloot on by default
 
     uint32 lfg_roles = BotDataMgr::BotToLFGRoles(bot->GetBotAI()->GetBotRoles());
     _owner->GetGroup()->SetLfgRoles(bot->GetGUID(), lfg_roles);
@@ -2186,6 +2187,28 @@ void BotMgr::HandleDelayedTeleports()
     delayed_bot_teleports.clear();
 }
 
+// By leewheel 20260524 - quick group / LFG bots: enable autoloot + all quality tiers by default
+static void ApplyServiceBotDefaultAutoloot(Creature* bot)
+{
+    bot_ai* ai = bot ? bot->GetBotAI() : nullptr;
+    if (!ai)
+        return;
+
+    static uint32 const lootRoles[] = {
+        BOT_ROLE_AUTOLOOT,
+        BOT_ROLE_AUTOLOOT_POOR,
+        BOT_ROLE_AUTOLOOT_COMMON,
+        BOT_ROLE_AUTOLOOT_UNCOMMON,
+        BOT_ROLE_AUTOLOOT_RARE,
+        BOT_ROLE_AUTOLOOT_EPIC,
+        BOT_ROLE_AUTOLOOT_LEGENDARY,
+    };
+
+    for (uint32 role : lootRoles)
+        if (!ai->HasRole(role))
+            ai->ToggleRole(role, true);
+}
+
 void BotMgr::SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole)
 {
     bot_ai* ai = bot->GetBotAI();
@@ -2211,6 +2234,8 @@ void BotMgr::SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole)
 
     uint8 spec = BotDataMgr::SelectBotSpecForRoles(bot->GetBotClass(), botrole);
     ai->SetSpec(spec, true);
+
+    ApplyServiceBotDefaultAutoloot(const_cast<Creature*>(bot));
 }
 
 // By leewheel 20260523

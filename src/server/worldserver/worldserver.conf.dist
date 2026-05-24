@@ -4964,4 +4964,12 @@ NpcBot.HK.Rate.Honor = 1.0
 NpcBot.Premade.Enable = 0
 
 #
+#    JunkToGold.Enable
+#        Description: Automatically vendor grey (poor quality) loot for gold when picked up.
+#        Default:     1 - (Enabled)
+#                     0 - (Disabled)
+
+JunkToGold.Enable = 1
+
+#
 ###################################################################################################
