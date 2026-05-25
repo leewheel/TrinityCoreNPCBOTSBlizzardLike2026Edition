@@ -3981,6 +3981,7 @@ Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors
 Logger.sql.updates=3,Console Server
 Logger.mmaps=3,Server
+# npcbots=3 allows Info-level wanderer sample logs (30s); level 4 hides them
 Logger.npcbots=3,NpcBots
 Logger.botwperror=3,BotWpError
 
@@ -4200,6 +4201,13 @@ NpcBot.LogToDB = 0
 #        Max:         39
 
 NpcBot.MaxBots = 1,1,1,1,1,1,1,1,1
+
+#
+#    NpcBot.MaxBots.QuickGroup
+#        Description: Max bots for .npcbot quick10/quick25/quick40 and LFG service hire (not limited by MaxBots brackets).
+#        Default:     39
+
+NpcBot.MaxBots.QuickGroup = 39
 
 #
 #    NpcBot.MaxBotsPerClass
@@ -4757,10 +4765,10 @@ NpcBot.WanderingBots.Continents.Count = 0
 #    NpcBot.WanderingBots.Log.SampleCount
 #        Description: Every SampleInterval seconds, log behavior of SampleCount wandering bots
 #                     (capped by Continents.Count and active wanderers). Disabled when Count is 0.
-#        Default:     30 - (NpcBot.WanderingBots.Log.SampleInterval)
+#        Default:     300 - (NpcBot.WanderingBots.Log.SampleInterval, 5 minutes)
 #                     20 - (NpcBot.WanderingBots.Log.SampleCount)
 
-NpcBot.WanderingBots.Log.SampleInterval = 30
+NpcBot.WanderingBots.Log.SampleInterval = 300
 NpcBot.WanderingBots.Log.SampleCount = 20
 
 #

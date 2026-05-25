@@ -50,7 +50,7 @@
 #include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
 
-// Wandering bot per-tick TRACE/DEBUG disabled; see BotDataMgr::UpdateWandererLogSampler().
+// Wandering bot per-tick TRACE/DEBUG disabled; periodic summary in BotDataMgr::UpdateWandererLogSampler().
 #define WANDER_BOT_LOG_TRACE(filterType__, ...) ((void)0)
 #define WANDER_BOT_LOG_DEBUG(filterType__, ...) ((void)0)
 #include "TemporarySummon.h"

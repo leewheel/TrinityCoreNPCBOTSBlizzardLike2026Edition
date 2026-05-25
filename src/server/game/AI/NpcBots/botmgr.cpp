@@ -915,13 +915,16 @@ BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost)
         ch.PSendSysMessage(bot_ai::LocalizedNpcText(GetOwner(), BOT_TEXT_BOTADDFAIL_OWNED).c_str(), bot->GetName(), bot->GetBotOwner()->GetName());
         return BOT_ADD_NOT_AVAILABLE;
     }
-    if (!owned && owned_count >= BotCfg::GetMaxNpcBots(_owner->GetLevel()))
+    uint8 const maxBots = chargeHireCost
+        ? BotCfg::GetMaxNpcBots(_owner->GetLevel())
+        : BotCfg::GetMaxNpcBotsQuickGroup(_owner->GetLevel());
+    if (!owned && owned_count >= maxBots)
     {
         ChatHandler ch(_owner->GetSession());
-        ch.PSendSysMessage(bot_ai::LocalizedNpcText(GetOwner(), BOT_TEXT_HIREFAIL_MAXBOTS).c_str(), BotCfg::GetMaxNpcBots(_owner->GetLevel()));
+        ch.PSendSysMessage(bot_ai::LocalizedNpcText(GetOwner(), BOT_TEXT_HIREFAIL_MAXBOTS).c_str(), maxBots);
         return BOT_ADD_MAX_EXCEED;
     }
-    if (!owned && BotCfg::GetMaxClassBots() && class_count >= BotCfg::GetMaxClassBots())
+    if (!owned && chargeHireCost && BotCfg::GetMaxClassBots() && class_count >= BotCfg::GetMaxClassBots())
     {
         ChatHandler ch(_owner->GetSession());
         ch.PSendSysMessage(bot_ai::LocalizedNpcText(GetOwner(), BOT_TEXT_HIREFAIL_MAXCLASSBOTS).c_str(), class_count, BotCfg::GetMaxClassBots());

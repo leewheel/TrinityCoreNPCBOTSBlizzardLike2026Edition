@@ -125,6 +125,7 @@ public:
     static uint32 GetEngageDelayHealDefault();
 
     static uint8 GetMaxNpcBots(uint8 level);
+    static uint8 GetMaxNpcBotsQuickGroup(uint8 level);
     static bool IsNpcBotXpReductionEnabled();
     static bool IsNpcBotXpReductionGroupOnly();
     static uint8 GetNpcBotXpReductionExtraAmount();

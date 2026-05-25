@@ -181,6 +181,7 @@ static std::vector<float> _mult_heal_levels;
 static std::vector<float> _mult_hp_levels;
 static std::vector<float> _mult_mp_levels;
 static LvlBrackets _max_npcbots;
+static uint8 _maxNpcBotsQuickGroup = 39;
 static PctBrackets _botwanderer_pct_level_brackets;
 static ItemLvlBrackets _botwanderer_itemlvl_level_brackets;
 static PctBrackets _botdungeon_itemlvl_brackets;
@@ -447,7 +448,7 @@ private:
         _botStatLimits_block            = sConfigMgr->GetFloatDefault("NpcBot.Stats.Limits.Block", 95.0f);
         _botStatLimits_crit             = sConfigMgr->GetFloatDefault("NpcBot.Stats.Limits.Crit", 95.0f);
         _desiredWanderingBotsCount      = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Continents.Count", 0);
-        _wanderingBotsLogSampleIntervalSec = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Log.SampleInterval", 30);
+        _wanderingBotsLogSampleIntervalSec = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Log.SampleInterval", 300);
         _wanderingBotsLogSampleCount    = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Log.SampleCount", 20);
         _wandererGridUnloadEnabled      = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Grid.UnloadEmptyMaps", true);
         _wandererGridEmptyMapIdleSec    = uint32(std::max<int32>(sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Grid.EmptyMapIdleSec", 300), 60));
@@ -498,6 +499,8 @@ private:
             }
             _max_npcbots[i] = uval;
         }
+
+        _maxNpcBotsQuickGroup = uint8(std::min<int32>(std::max<int32>(sConfigMgr->GetIntDefault("NpcBot.MaxBots.QuickGroup", 39), 1), 39));
 
         _mult_dmg_levels.clear();
         std::string mult_dps_by_levels = sConfigMgr->GetStringDefault("NpcBot.Mult.Damage.Levels", "1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0,1.0");
@@ -1202,6 +1205,11 @@ uint8 BotCfg::GetNpcBotMountLevel100()
 uint8 BotCfg::GetMaxNpcBots(uint8 level)
 {
     return _max_npcbots[std::min<size_t>(BRACKETS_COUNT - 1, level / 10)];
+}
+
+uint8 BotCfg::GetMaxNpcBotsQuickGroup(uint8 /*level*/)
+{
+    return _maxNpcBotsQuickGroup;
 }
 
 int32 BotCfg::GetBotInfoPacketsLimit()

@@ -62,6 +62,49 @@ static std::string FormatUptimeDuration(uint32 uptimeSec)
     uint32 const secs = uptimeSec % 60u;
     return Bcore::StringFormat("{}h{}m{}s", hours, mins, secs);
 }
+
+struct WandererPeriodicStats
+{
+    uint32 gridRecycleTotal = 0;
+    std::unordered_map<uint32, uint32> gridRecycleByMap;
+    uint32 replenishQueued = 0;
+
+    void RecordGridRecycle(uint32 mapId, uint32 count)
+    {
+        gridRecycleTotal += count;
+        gridRecycleByMap[mapId] += count;
+    }
+
+    void RecordReplenishQueued(uint32 count) { replenishQueued += count; }
+
+    void Clear() { gridRecycleTotal = 0; gridRecycleByMap.clear(); replenishQueued = 0; }
+};
+
+static WandererPeriodicStats s_wandererPeriodStats;
+
+static std::string FormatWandererPeriodStats()
+{
+    if (!s_wandererPeriodStats.gridRecycleTotal && !s_wandererPeriodStats.replenishQueued)
+        return " 周期统计: 格子回收 0 | 补员排队 0";
+
+    std::string line = Bcore::StringFormat(" 周期统计: 格子回收 {} (", s_wandererPeriodStats.gridRecycleTotal);
+    bool first = true;
+    for (uint32 mapId : BotCfg::GetWanderContinentMapIds())
+    {
+        auto itr = s_wandererPeriodStats.gridRecycleByMap.find(mapId);
+        if (itr == s_wandererPeriodStats.gridRecycleByMap.end() || !itr->second)
+            continue;
+        if (!first)
+            line += ", ";
+        line += Bcore::StringFormat("map{}:{}", mapId, itr->second);
+        first = false;
+    }
+    if (first)
+        line += "-";
+    line += Bcore::StringFormat(") | 补员排队 {} | 空图阈值 {}s",
+        s_wandererPeriodStats.replenishQueued, BotCfg::GetWandererGridEmptyMapIdleSec());
+    return line;
+}
 }
 /*
 Npc Bot Data Manager by Trickerer (onlysuffering@gmail.com)
@@ -893,15 +936,13 @@ void BotDataMgr::UpdateWandererLogSampler(uint32 diff)
             wanderers.push_back(bot);
     }
 
-    if (wanderers.empty())
-        return;
-
     const uint32 activeCount = uint32(wanderers.size());
     uint32 sampleCount = BotCfg::GetWanderingBotsLogSampleCount();
     sampleCount = std::min(sampleCount, desiredCount);
     sampleCount = std::min(sampleCount, activeCount);
 
-    Bcore::Containers::RandomResize(wanderers, sampleCount);
+    if (sampleCount)
+        Bcore::Containers::RandomResize(wanderers, sampleCount);
 
     time_t const now = GameTime::GetGameTime();
     time_t const startTime = GameTime::GetStartTime();
@@ -912,14 +953,20 @@ void BotDataMgr::UpdateWandererLogSampler(uint32 diff)
         "========================================================================================\n"
         " 当前时间: {} | 服务启动: {} | 总运行: {} | 内存: {} MB\n"
         " 抽取 {} 个样本 / 当前激活 {} 个 / 配置上限 {} 个 / 取样间隔 {}s\n"
+        "{}\n"
         "========================================================================================",
         TimeToTimestampStr(now), TimeToTimestampStr(startTime), FormatUptimeDuration(uptimeSec), GetProcessWorkingSetMB(),
-        sampleCount, activeCount, desiredCount, intervalMs / IN_MILLISECONDS);
+        sampleCount, activeCount, desiredCount, intervalMs / IN_MILLISECONDS, FormatWandererPeriodStats());
 
-    bot_ai::LogWandererBehaviorSampleHeader();
-    for (Creature const* bot : wanderers)
-        bot->GetBotAI()->LogWandererBehaviorSample();
+    if (sampleCount)
+    {
+        bot_ai::LogWandererBehaviorSampleHeader();
+        for (Creature const* bot : wanderers)
+            bot->GetBotAI()->LogWandererBehaviorSample();
+    }
+
     BOT_LOG_INFO("npcbots", "========================================================================================");
+    s_wandererPeriodStats.Clear();
 }
 
 static uint32 CountActiveWanderersInWorld()
@@ -946,7 +993,7 @@ void BotDataMgr::TryReplenishWanderingBots()
     if (!sBotGen->GenerateWanderingBotsToSpawn(need, -1, -1, false, nullptr, nullptr, spawned))
         BOT_LOG_WARN("npcbots", "TryReplenishWanderingBots: failed to queue {} wanderers (active {}, desired {})", need, active, desired);
     else if (spawned)
-        BOT_LOG_DEBUG("npcbots", "TryReplenishWanderingBots: queued {} wanderers (active {}, desired {})", spawned, active, desired);
+        s_wandererPeriodStats.RecordReplenishQueued(spawned);
 }
 
 void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
@@ -997,8 +1044,7 @@ void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
         if (toDespawn.empty())
             continue;
 
-        BOT_LOG_INFO("npcbots", "Grid recycle: despawn {} wanderers on map {} (no players for {}s)",
-            uint32(toDespawn.size()), mapId, idleSec);
+        s_wandererPeriodStats.RecordGridRecycle(mapId, uint32(toDespawn.size()));
 
         for (uint32 entry : toDespawn)
             DespawnWandererBot(entry);

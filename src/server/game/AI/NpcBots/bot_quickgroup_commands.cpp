@@ -50,21 +50,25 @@ void DetectPlayerRole(Player* player, bool& isTank, bool& isHealer, bool& isDPS)
     }
 }
 
-bool HireBotForRole(Player* player, BotMgr* mgr, uint32 botRole, std::set<uint8>& usedClasses, std::function<bool(uint8)> const& classOk)
+bool HireBotForRole(Player* player, BotMgr* mgr, uint32 botRole, std::set<uint8>& usedClasses, std::function<bool(uint8)> const& classOk, bool uniqueClassPerRole)
 {
+    static std::set<uint8> const emptyUsed;
+
     for (uint8 botClass = BOT_CLASS_WARRIOR; botClass < BOT_CLASS_END; ++botClass)
     {
         if (!classOk(botClass))
             continue;
 
-        Creature* bot = BotDataMgr::FindFreeHireBotForQuickGroup(player, botClass, usedClasses);
+        std::set<uint8> const& classFilter = uniqueClassPerRole ? usedClasses : emptyUsed;
+        Creature* bot = BotDataMgr::FindFreeHireBotForQuickGroup(player, botClass, classFilter);
         if (!bot)
             continue;
 
         if (mgr->AddServiceBot(bot, botRole) != BOT_ADD_SUCCESS)
             continue;
 
-        usedClasses.insert(bot->GetBotClass());
+        if (uniqueClassPerRole)
+            usedClasses.insert(bot->GetBotClass());
         mgr->AddBotToGroup(bot);
         return true;
     }
@@ -88,7 +92,9 @@ bool Fill(Player* player, uint8 partySize, uint8 tanksNeeded, uint8 offTanksNeed
     std::set<uint8> usedClasses;
     usedClasses.insert(player->GetClass());
 
-    uint8 botsToHire = partySize > player->GetNpcBotsCount() ? partySize - player->GetNpcBotsCount() : 0;
+    uint8 const targetBots = partySize > 0 ? partySize - 1 : 0;
+    uint8 botsToHire = targetBots > player->GetNpcBotsCount() ? targetBots - player->GetNpcBotsCount() : 0;
+    bool const uniqueClassPerRole = partySize < 10;
 
     if (isTank && tanksNeeded) { --tanksNeeded; --botsToHire; }
     if (isHealer && healersNeeded) { --healersNeeded; --botsToHire; }
@@ -105,7 +111,7 @@ bool Fill(Player* player, uint8 partySize, uint8 tanksNeeded, uint8 offTanksNeed
         if (!HireBotForRole(player, mgr, BOT_ROLE_TANK, usedClasses, [player](uint8 c) {
             return c == BOT_CLASS_WARRIOR || c == BOT_CLASS_PALADIN ||
                 (c == BOT_CLASS_DEATH_KNIGHT && player->GetLevel() >= 55);
-        }))
+        }, uniqueClassPerRole))
             break;
         --tanksNeeded;
         --botsToHire;
@@ -116,7 +122,7 @@ bool Fill(Player* player, uint8 partySize, uint8 tanksNeeded, uint8 offTanksNeed
         if (!HireBotForRole(player, mgr, BOT_ROLE_TANK_OFF, usedClasses, [player](uint8 c) {
             return c == BOT_CLASS_WARRIOR || c == BOT_CLASS_PALADIN || c == BOT_CLASS_DRUID ||
                 (c == BOT_CLASS_DEATH_KNIGHT && player->GetLevel() >= 55);
-        }))
+        }, uniqueClassPerRole))
             break;
         --offTanksNeeded;
         --botsToHire;
@@ -126,7 +132,7 @@ bool Fill(Player* player, uint8 partySize, uint8 tanksNeeded, uint8 offTanksNeed
     {
         if (!HireBotForRole(player, mgr, BOT_ROLE_HEAL, usedClasses, [](uint8 c) {
             return c == BOT_CLASS_PALADIN || c == BOT_CLASS_PRIEST || c == BOT_CLASS_SHAMAN || c == BOT_CLASS_DRUID;
-        }))
+        }, uniqueClassPerRole))
             break;
         --healersNeeded;
         --botsToHire;
@@ -138,7 +144,7 @@ bool Fill(Player* player, uint8 partySize, uint8 tanksNeeded, uint8 offTanksNeed
             return c == BOT_CLASS_WARRIOR || c == BOT_CLASS_PALADIN || c == BOT_CLASS_HUNTER || c == BOT_CLASS_ROGUE ||
                 c == BOT_CLASS_PRIEST || c == BOT_CLASS_SHAMAN || c == BOT_CLASS_MAGE || c == BOT_CLASS_WARLOCK ||
                 c == BOT_CLASS_DRUID || (c == BOT_CLASS_DEATH_KNIGHT && player->GetLevel() >= 55);
-        }))
+        }, uniqueClassPerRole))
             break;
         --dpsNeeded;
         --botsToHire;
