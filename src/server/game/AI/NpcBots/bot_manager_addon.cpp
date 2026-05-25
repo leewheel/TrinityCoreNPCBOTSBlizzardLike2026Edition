@@ -378,13 +378,28 @@ namespace
         SendBMU(player, "E;END");
     }
 
-    std::vector<uint32> LoadOwnedBotEntries(Player const* player)
+    // 仅当前跟随/已召唤的 Bot（与 BotMgr 一致），避免 BMU 列出历史上雇佣过但未跟队的 entry
+    std::vector<uint32> LoadActiveBotEntries(Player const* player)
     {
         std::vector<uint32> entries;
         if (!player)
             return entries;
 
-        BotDataMgr::CollectOwnedBotEntries(player->GetGUID().GetCounter(), true, entries);
+        BotMgr const* mgr = player->GetBotMgr();
+        if (!mgr)
+            return entries;
+
+        BotMap const* botMap = mgr->GetBotMap();
+        if (!botMap)
+            return entries;
+
+        entries.reserve(botMap->size());
+        for (auto const& [guid, bot] : *botMap)
+        {
+            if (!bot)
+                continue;
+            entries.push_back(bot->GetEntry());
+        }
         return entries;
     }
 
@@ -398,13 +413,13 @@ namespace
 
     void HandleRefresh(Player* player)
     {
-        std::vector<uint32> entries = LoadOwnedBotEntries(player);
-        BOT_LOG_INFO("npcbots", "BMU REFRESH: player '{}' guid {} owned bots {}",
+        std::vector<uint32> entries = LoadActiveBotEntries(player);
+        BOT_LOG_INFO("npcbots", "BMU REFRESH: player '{}' guid {} active bots {}",
             player->GetName(), player->GetGUID().GetCounter(), entries.size());
 
         if (entries.empty())
         {
-            ChatHandler(player->GetSession()).SendSysMessage("[机器人管理] 未找到属于你的机器人，请先雇佣或召唤机器人。");
+            ChatHandler(player->GetSession()).SendSysMessage("[机器人管理] 当前没有跟随你的机器人，请先雇佣、快速组队或召唤机器人。");
             SendBMU(player, "E;END");
             return;
         }

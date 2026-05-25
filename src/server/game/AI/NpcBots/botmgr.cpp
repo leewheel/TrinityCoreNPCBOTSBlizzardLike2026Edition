@@ -534,6 +534,7 @@ void BotMgr::OnTeleportFar(uint32 mapId, float x, float y, float z, float ori)
 {
     Map* newMap = sMapMgr->CreateBaseMap(mapId);
     Position pos{ x, y, z, ori };
+    bool const quickFollow = newMap && (newMap->IsDungeon() || newMap->IsRaid());
 
     for (auto const& [_, bot] : _bots)
     {
@@ -546,7 +547,7 @@ void BotMgr::OnTeleportFar(uint32 mapId, float x, float y, float z, float ori)
         }
 
         //_owner->m_Controlled.erase(bot);
-        TeleportBot(bot, newMap, &pos);
+        TeleportBot(bot, newMap, &pos, quickFollow);
     }
 }
 

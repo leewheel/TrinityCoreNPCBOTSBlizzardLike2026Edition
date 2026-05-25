@@ -15208,8 +15208,11 @@ void bot_ai::ApplyBotRandomEquip()
 // By leewheel 20260523 - best gear for temp service bots (quick group / LFG)
 void bot_ai::ApplyServiceRandomEquip()
 {
+    bool const prevCanUpdate = canUpdate;
+    canUpdate = true;
     InitRandomEquipWithQuality();
     RefreshEquipsAfterGenerate();
+    canUpdate = prevCanUpdate;
 }
 // end By leewheel 20260523
 
