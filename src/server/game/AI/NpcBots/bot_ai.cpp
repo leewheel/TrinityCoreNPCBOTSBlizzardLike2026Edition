@@ -686,7 +686,7 @@ bool SpellHasFearLikeEffect(SpellInfo const* spellInfo)
         if (!eff.IsEffect())
             continue;
 
-        if (eff.IsAura(SPELL_AURA_MOD_FEAR) || eff.IsAura(SPELL_AURA_MOD_HORROR))
+        if (eff.IsAura(SPELL_AURA_MOD_FEAR))
             return true;
 
         if (eff.Mechanic == MECHANIC_FEAR || eff.Mechanic == MECHANIC_HORROR)
