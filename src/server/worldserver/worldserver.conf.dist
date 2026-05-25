@@ -3981,7 +3981,7 @@ Logger.scripts.hotswap=3,Console Server
 Logger.sql.sql=5,Console DBErrors
 Logger.sql.updates=3,Console Server
 Logger.mmaps=3,Server
-Logger.npcbots=4,NpcBots
+Logger.npcbots=3,NpcBots
 Logger.botwperror=3,BotWpError
 
 #Logger.achievement=3,Console Server
@@ -4762,6 +4762,18 @@ NpcBot.WanderingBots.Continents.Count = 0
 
 NpcBot.WanderingBots.Log.SampleInterval = 30
 NpcBot.WanderingBots.Log.SampleCount = 20
+
+#
+#    NpcBot.WanderingBots.Grid.UnloadEmptyMaps
+#    NpcBot.WanderingBots.Grid.EmptyMapIdleSec
+#        Description: When no player is on a wander continent map for EmptyMapIdleSec seconds,
+#                     despawn wanderers on that map so Map::UnloadGrid can reclaim grids.
+#                     Replenish runs globally when count drops below Continents.Count.
+#        Default:     1 - (UnloadEmptyMaps enabled)
+#                     300 - (EmptyMapIdleSec, minimum 60)
+
+NpcBot.WanderingBots.Grid.UnloadEmptyMaps = 1
+NpcBot.WanderingBots.Grid.EmptyMapIdleSec = 300
 
 #
 #    NpcBot.WanderingBots.Continents.Levels

@@ -207,6 +207,9 @@ class BotDataMgr
 public:
     static void Update(uint32 diff);
     static void UpdateWandererLogSampler(uint32 diff);
+    static void UpdateWandererGridRecycle(uint32 diff);
+    static void TryReplenishWanderingBots();
+    static void DisableAndDespawnWanderer(Creature* bot, char const* reason);
 
     static void LoadNpcBots(bool spawn = true);
     static void LoadNpcBotGroupData();

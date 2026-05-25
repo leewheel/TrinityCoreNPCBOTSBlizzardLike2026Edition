@@ -3,6 +3,8 @@
 
 #include "botcommon.h"
 
+#include <vector>
+
 class Map;
 
 enum SharedOwnerOptions : uint32
@@ -88,6 +90,9 @@ public:
     static uint32 GetDesiredWanderingBotsCount();
     static uint32 GetWanderingBotsLogSampleIntervalMs();
     static uint32 GetWanderingBotsLogSampleCount();
+    static bool IsWandererGridUnloadEnabled();
+    static uint32 GetWandererGridEmptyMapIdleSec();
+    static std::vector<uint32> const& GetWanderContinentMapIds();
     static uint32 GetBGTargetTeamPlayersCount(BattlegroundTypeId bgTypeId);
     static float GetBotHKHonorRate();
     static float GetBotStatLimitDodge();

@@ -52,6 +52,8 @@ static uint32 _npcBotOwnerExpireTime;
 static uint32 _desiredWanderingBotsCount;
 static uint32 _wanderingBotsLogSampleIntervalSec;
 static uint32 _wanderingBotsLogSampleCount;
+static bool _wandererGridUnloadEnabled;
+static uint32 _wandererGridEmptyMapIdleSec;
 static uint32 _killrewardWandererMoneyBase;
 static uint32 _killrewardWandererItemCount;
 static uint32 _killrewardWandererItemQuality;
@@ -447,6 +449,8 @@ private:
         _desiredWanderingBotsCount      = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Continents.Count", 0);
         _wanderingBotsLogSampleIntervalSec = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Log.SampleInterval", 30);
         _wanderingBotsLogSampleCount    = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Log.SampleCount", 20);
+        _wandererGridUnloadEnabled      = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Grid.UnloadEmptyMaps", true);
+        _wandererGridEmptyMapIdleSec    = uint32(std::max<int32>(sConfigMgr->GetIntDefault("NpcBot.WanderingBots.Grid.EmptyMapIdleSec", 300), 60));
         _killrewardWandererMoneyBase    = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.KillReward.Money", 0);
         _killrewardWandererItemCount    = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.KillReward.ItemCount", 0);
         _killrewardWandererItemQuality  = sConfigMgr->GetIntDefault("NpcBot.WanderingBots.KillReward.ItemQuality", int(ITEM_QUALITY_RARE));
@@ -1097,6 +1101,18 @@ uint32 BotCfg::GetWanderingBotsLogSampleIntervalMs()
 uint32 BotCfg::GetWanderingBotsLogSampleCount()
 {
     return _wanderingBotsLogSampleCount;
+}
+bool BotCfg::IsWandererGridUnloadEnabled()
+{
+    return _wandererGridUnloadEnabled;
+}
+uint32 BotCfg::GetWandererGridEmptyMapIdleSec()
+{
+    return _wandererGridEmptyMapIdleSec;
+}
+std::vector<uint32> const& BotCfg::GetWanderContinentMapIds()
+{
+    return _enabled_wander_node_maps;
 }
 uint32 BotCfg::GetBGTargetTeamPlayersCount(BattlegroundTypeId bgTypeId)
 {

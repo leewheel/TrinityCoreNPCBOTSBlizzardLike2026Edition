@@ -18758,9 +18758,9 @@ void bot_ai::UpdateReviveTimer(uint32 diff)
                     WanderNode const* nextNode = GetNextTravelNode(&safePos, true);
                     if (!nextNode)
                     {
-                        BOT_WP_LOG_FATAL("scripts", "Bot {} ({}) is unable to get next travel node (1)! cur {}, last {}, position: {}. BOT WAS DISABLED",
+                        BOT_WP_LOG_FATAL("scripts", "Bot {} ({}) is unable to get next travel node (1)! cur {}, last {}, position: {}",
                             me->GetName(), me->GetEntry(), _travel_node_cur->GetWPId(), _travel_node_last ? _travel_node_last->GetWPId() : 0, me->GetPosition().ToString());
-                        canUpdate = false;
+                        BotDataMgr::DisableAndDespawnWanderer(me, "no travel node after death");
                         return;
                     }
 
@@ -18921,9 +18921,9 @@ void bot_ai::Evade()
                 WanderNode const* nextNode = GetNextTravelNode(&pos, false);
                 if (!nextNode)
                 {
-                    BOT_WP_LOG_FATAL("npcbots", "Bot {} ({}) is unable to get next travel node! cur {}, last {}, position: {}. BOT WAS DISABLED",
+                    BOT_WP_LOG_FATAL("npcbots", "Bot {} ({}) is unable to get next travel node! cur {}, last {}, position: {}",
                         me->GetName(), me->GetEntry(), _travel_node_cur->GetWPId(), _travel_node_last ? _travel_node_last->GetWPId() : 0, me->GetPosition().ToString());
-                    canUpdate = false;
+                    BotDataMgr::DisableAndDespawnWanderer(me, "no travel node on evade");
                     return;
                 }
 

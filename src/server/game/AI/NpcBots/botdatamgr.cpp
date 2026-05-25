@@ -35,6 +35,7 @@
 
 #include <algorithm>
 #include <numeric>
+#include <unordered_map>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -229,7 +230,7 @@ static void SpawnWandererBot(uint32 bot_id, WanderNode const* spawnLoc, NpcBotRe
     ASSERT(bot_extras);
 
     Map* map = sMapMgr->CreateBaseMap(spawnLoc->GetMapId());
-    map->LoadGrid(spawnLoc->m_positionX, spawnLoc->m_positionY);
+    // Do not call LoadGrid here: it pins grids without unload. AddToWorld loads the cell as needed.
 
     Creature* bot = new Creature();
     if (!bot->LoadBotCreatureFromDB(0, map, true, true, bot_id, &spawnPos))
@@ -254,6 +255,15 @@ void BotDataMgr::DespawnWandererBot(uint32 entry)
     }
     else
         BOT_LOG_ERROR("npcbots", "DespawnWandererBot(): trying to despawn non-existing wanderer bot {} '{}'!", entry, bot ? bot->GetName() : "unknown");
+}
+
+void BotDataMgr::DisableAndDespawnWanderer(Creature* bot, char const* reason)
+{
+    if (!bot || !bot->IsWandererBot())
+        return;
+
+    BOT_LOG_WARN("npcbots", "Wanderer {} ({}) removed: {}", bot->GetName(), bot->GetEntry(), reason ? reason : "unknown");
+    DespawnWandererBot(bot->GetEntry());
 }
 
 static void SpawnDungeonBot(uint32 bot_id, Player const* owner)
@@ -912,9 +922,93 @@ void BotDataMgr::UpdateWandererLogSampler(uint32 diff)
     BOT_LOG_INFO("npcbots", "========================================================================================");
 }
 
+static uint32 CountActiveWanderersInWorld()
+{
+    uint32 count = 0;
+    for (Creature const* bot : _existingBots)
+        if (bot && bot->IsInWorld() && bot->IsWandererBot())
+            ++count;
+    return count;
+}
+
+void BotDataMgr::TryReplenishWanderingBots()
+{
+    uint32 const desired = BotCfg::GetDesiredWanderingBotsCount();
+    if (!desired)
+        return;
+
+    uint32 const active = CountActiveWanderersInWorld();
+    if (active >= desired)
+        return;
+
+    uint32 const need = desired - active;
+    uint32 spawned = 0;
+    if (!sBotGen->GenerateWanderingBotsToSpawn(need, -1, -1, false, nullptr, nullptr, spawned))
+        BOT_LOG_WARN("npcbots", "TryReplenishWanderingBots: failed to queue {} wanderers (active {}, desired {})", need, active, desired);
+    else if (spawned)
+        BOT_LOG_DEBUG("npcbots", "TryReplenishWanderingBots: queued {} wanderers (active {}, desired {})", spawned, active, desired);
+}
+
+void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
+{
+    if (!BotCfg::IsWandererGridUnloadEnabled() || !BotCfg::GetDesiredWanderingBotsCount())
+        return;
+
+    static uint32 timer = 0;
+    static std::unordered_map<uint32, time_t> lastPlayerSeen;
+    timer += diff;
+    if (timer < 10 * IN_MILLISECONDS)
+        return;
+    timer = 0;
+
+    time_t const now = GameTime::GetGameTime();
+    uint32 const idleSec = BotCfg::GetWandererGridEmptyMapIdleSec();
+
+    for (uint32 mapId : BotCfg::GetWanderContinentMapIds())
+    {
+        Map* map = sMapMgr->CreateBaseMap(mapId);
+        if (!map || !map->GetEntry()->IsWorldMap())
+            continue;
+
+        if (map->HavePlayers())
+        {
+            lastPlayerSeen[mapId] = now;
+            continue;
+        }
+
+        auto itr = lastPlayerSeen.find(mapId);
+        if (itr == lastPlayerSeen.end())
+        {
+            lastPlayerSeen[mapId] = now;
+            continue;
+        }
+
+        if (uint32(now - itr->second) < idleSec)
+            continue;
+
+        std::vector<uint32> toDespawn;
+        toDespawn.reserve(64);
+        for (Creature const* bot : _existingBots)
+        {
+            if (bot && bot->IsInWorld() && bot->IsWandererBot() && bot->GetMapId() == mapId)
+                toDespawn.push_back(bot->GetEntry());
+        }
+
+        if (toDespawn.empty())
+            continue;
+
+        BOT_LOG_INFO("npcbots", "Grid recycle: despawn {} wanderers on map {} (no players for {}s)",
+            uint32(toDespawn.size()), mapId, idleSec);
+
+        for (uint32 entry : toDespawn)
+            DespawnWandererBot(entry);
+    }
+}
+
 void BotDataMgr::Update(uint32 diff)
 {
     UpdateWandererLogSampler(diff);
+    UpdateWandererGridRecycle(diff);
 
     botSpawnEvents.Update(diff);
     for (auto& [_, events] : botBGJoinEvents)
@@ -987,6 +1081,14 @@ void BotDataMgr::Update(uint32 diff)
         }
 
         return;
+    }
+
+    static uint32 replenishTimer = 0;
+    replenishTimer += diff;
+    if (replenishTimer >= 5 * IN_MILLISECONDS)
+    {
+        replenishTimer = 0;
+        TryReplenishWanderingBots();
     }
 }
 
