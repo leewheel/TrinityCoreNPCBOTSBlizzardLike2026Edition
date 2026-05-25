@@ -672,6 +672,36 @@ SpellCastResult bot_ai::CheckBotCast(Unit const* victim, uint32 spellId) const
     return SPELL_CAST_OK;
 }
 
+namespace
+{
+// By leewheel 20260525 - no fear/horror in instances (avoid mobs running into packs)
+bool SpellHasFearLikeEffect(SpellInfo const* spellInfo)
+{
+    if (!spellInfo)
+        return false;
+
+    for (uint8 i = 0; i < MAX_SPELL_EFFECTS; ++i)
+    {
+        SpellEffectInfo const& eff = spellInfo->GetEffect(SpellEffIndex(i));
+        if (!eff.IsEffect())
+            continue;
+
+        if (eff.IsAura(SPELL_AURA_MOD_FEAR) || eff.IsAura(SPELL_AURA_MOD_HORROR))
+            return true;
+
+        if (eff.Mechanic == MECHANIC_FEAR || eff.Mechanic == MECHANIC_HORROR)
+            return true;
+    }
+
+    return false;
+}
+
+bool MapForbidsBotFearSpells(Map const* map)
+{
+    return map && (map->IsDungeon() || map->IsRaid());
+}
+}
+
 bool bot_ai::doCast(Unit* victim, uint32 spellId, bool triggered)
 {
     return doCast(victim, spellId, triggered ? TRIGGERED_FULL_MASK : TRIGGERED_NONE);
@@ -688,6 +718,9 @@ bool bot_ai::doCast(Unit* victim, uint32 spellId, TriggerCastFlags flags)
         return false;
 
     m_botSpellInfo = m_botSpellInfo->TryGetSpellInfoOverride(me);
+
+    if (MapForbidsBotFearSpells(me->GetMap()) && SpellHasFearLikeEffect(m_botSpellInfo))
+        return false;
 
     //select aura level
     if (victim->isType(TYPEMASK_UNIT))
