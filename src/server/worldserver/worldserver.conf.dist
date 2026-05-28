@@ -4193,6 +4193,43 @@ NpcBot.Enable = 1
 NpcBot.LogToDB = 0
 
 #
+#    NpcBot.Chat.Enable
+#    NpcBot.Chat.Enable.World
+#    NpcBot.Chat.Enable.Party
+#    NpcBot.Chat.Enable.Raid
+#        Description: Enable NPCBot autonomous channel chat.
+#        Default:     0 - (NpcBot.Chat.Enable)
+#                     1 - (World/Party/Raid switches)
+NpcBot.Chat.Enable = 0
+NpcBot.Chat.Enable.World = 1
+NpcBot.Chat.Enable.Party = 1
+NpcBot.Chat.Enable.Raid = 1
+#
+#    NpcBot.Chat.Interval.MinMs
+#    NpcBot.Chat.Interval.MaxMs
+#    NpcBot.Chat.Global.MaxPerMinute
+#    NpcBot.Chat.BotCooldownMs
+#        Description: Chat frequency control (global and per bot).
+NpcBot.Chat.Interval.MinMs = 30000
+NpcBot.Chat.Interval.MaxMs = 90000
+NpcBot.Chat.Global.MaxPerMinute = 20
+NpcBot.Chat.BotCooldownMs = 45000
+#
+#    NpcBot.Chat.WorldChannelName
+#        Description: Display name for bot world-channel style messages.
+NpcBot.Chat.WorldChannelName = "World"
+#
+#    NpcBot.Chat.LLM.Enable
+#    NpcBot.Chat.LLM.ModelName
+#    NpcBot.Chat.LLM.ModelPath
+#        Description: Embedded llama.cpp model selection.
+#                     Preferred: fill ModelName only, model is resolved from .\\ClientData\\Ai.Mod\\<ModelName>.
+#                     ModelPath is legacy fallback and still supported.
+NpcBot.Chat.LLM.Enable = 0
+NpcBot.Chat.LLM.ModelName = ""
+NpcBot.Chat.LLM.ModelPath = ""
+
+#
 #    NpcBot.MaxBots
 #        Description: Maximum number of bots player can hire per level bracket:
 #                     0-9, 10-19, 20,29, ... , 70-79, 80+.

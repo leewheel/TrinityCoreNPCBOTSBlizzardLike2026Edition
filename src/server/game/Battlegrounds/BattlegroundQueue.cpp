@@ -182,8 +182,8 @@ GroupQueueInfo* BattlegroundQueue::AddGroup(Player* leader, Group const* group, 
             ginfo->Players[member->GetGUID()]  = &pl_info;
         }
 
-        //npcbot: queue bots (bg only)
-        if (!arenateamid)
+        //npcbot: queue bots (BG + custom arena bot teams)
+        if (!arenateamid || m_queueId.BattlemasterListId == BATTLEGROUND_AA)
         {
             for (GroupBotReference const* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
             {

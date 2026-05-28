@@ -650,6 +650,12 @@ public:
             { "spell",      HandleNpcBotUseOnBotSpellCommand,       rbac::RBAC_PERM_COMMAND_NPCBOT_COMMAND_MISC,       Console::No  },
             { "item",       HandleNpcBotUseOnBotItemCommand,        rbac::RBAC_PERM_COMMAND_NPCBOT_COMMAND_MISC,       Console::No  },
         };
+        static ChatCommandTable npcbotArenaCommandTable =
+        {
+            { "teamname",   HandleNpcBotArenaTeamNameCommand,       rbac::RBAC_PERM_COMMAND_NPCBOT_COMMAND_MISC,       Console::No  },
+            { "roster",     HandleNpcBotArenaRosterCommand,         rbac::RBAC_PERM_COMMAND_NPCBOT_COMMAND_MISC,       Console::No  },
+            { "lockcheck",  HandleNpcBotArenaLockcheckCommand,      rbac::RBAC_PERM_COMMAND_NPCBOT_COMMAND_MISC,       Console::No  },
+        };
 
         static ChatCommandTable npcbotCommandTable =
         {
@@ -667,6 +673,7 @@ public:
             { "list",       npcbotListCommandTable                                                                                  },
             { "revive",     HandleNpcBotReviveCommand,              rbac::RBAC_PERM_COMMAND_NPCBOT_REVIVE,             Console::No  },
             { "useonbot",   npcbotUseOnBotCommandTable                                                                              },
+            { "arena",      npcbotArenaCommandTable                                                                                 },
             { "command",    npcbotCommandCommandTable                                                                               },
             { "info",       HandleNpcBotInfoCommand,                rbac::RBAC_PERM_COMMAND_NPCBOT_INFO,               Console::Yes },
             { "hide",       HandleNpcBotHideCommand,                rbac::RBAC_PERM_COMMAND_NPCBOT_HIDE,               Console::No  },
@@ -706,6 +713,105 @@ public:
         trans->Append("ALTER TABLE `characters_npcbot_logs` AUTO_INCREMENT = 0");
         CharacterDatabase.CommitTransaction(trans);
         handler->SendSysMessage("Table `characters_npcbot_logs` was cleared and autoincrement was reset");
+        return true;
+    }
+
+    static bool HandleNpcBotArenaTeamNameCommand(ChatHandler* handler, Optional<uint8> bracket, Optional<std::string> teamName)
+    {
+        // By leewheel 20260528 - player-facing arena bot team name setter (2/3/5).
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player || !bracket || !teamName)
+        {
+            handler->SendSysMessage(".npcbot arena teamname #bracket(2|3|5) \"Team Name\"");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint8 const arenaType = *bracket;
+        if (arenaType != 2 && arenaType != 3 && arenaType != 5)
+        {
+            handler->SendSysMessage("Invalid bracket. Use 2, 3 or 5.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        if (teamName->empty() || teamName->size() > 24)
+        {
+            handler->SendSysMessage("Team name must be 1..24 chars.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        BotDataMgr::EnsureArenaBotProfile(player->GetGUID(), arenaType, *teamName);
+        BotDataMgr::SetArenaBotTeamName(player->GetGUID(), arenaType, *teamName);
+        handler->PSendSysMessage("Arena bot team name set: bracket {}v{} -> {}", uint32(arenaType), uint32(arenaType), *teamName);
+        return true;
+    }
+
+    static bool HandleNpcBotArenaRosterCommand(ChatHandler* handler, Optional<uint8> bracket)
+    {
+        // By leewheel 20260528 - inspect fixed arena bot roster for selected bracket.
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player || !bracket)
+        {
+            handler->SendSysMessage(".npcbot arena roster #bracket(2|3|5)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint8 const arenaType = *bracket;
+        if (arenaType != 2 && arenaType != 3 && arenaType != 5)
+        {
+            handler->SendSysMessage("Invalid bracket. Use 2, 3 or 5.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::vector<ArenaBotRosterSlot> roster = BotDataMgr::GetArenaBotRoster(player->GetGUID(), arenaType);
+        std::string teamName = BotDataMgr::GetArenaBotTeamName(player->GetGUID(), arenaType);
+        if (teamName.empty())
+            teamName = player->GetName();
+        handler->PSendSysMessage("Arena bot team [{}v{}] '{}': {} slot(s)", uint32(arenaType), uint32(arenaType), teamName, uint32(roster.size()));
+        for (ArenaBotRosterSlot const& slot : roster)
+            handler->PSendSysMessage(" - slot {}: entry {} class {} spec {}", uint32(slot.slot), uint32(slot.botEntry), uint32(slot.botClass), uint32(slot.botSpec));
+        return true;
+    }
+
+    static bool HandleNpcBotArenaLockcheckCommand(ChatHandler* handler, Optional<uint8> bracket)
+    {
+        // By leewheel 20260528 - check arena roster lock ownership for current player.
+        Player* player = handler->GetSession() ? handler->GetSession()->GetPlayer() : nullptr;
+        if (!player || !bracket)
+        {
+            handler->SendSysMessage(".npcbot arena lockcheck #bracket(2|3|5)");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        uint8 const arenaType = *bracket;
+        if (arenaType != 2 && arenaType != 3 && arenaType != 5)
+        {
+            handler->SendSysMessage("Invalid bracket. Use 2, 3 or 5.");
+            handler->SetSentErrorMessage(true);
+            return false;
+        }
+
+        std::vector<ArenaBotRosterSlot> roster = BotDataMgr::GetArenaBotRoster(player->GetGUID(), arenaType);
+        if (roster.empty())
+        {
+            handler->PSendSysMessage("Arena bot lockcheck [{}v{}]: roster is empty.", uint32(arenaType), uint32(arenaType));
+            return true;
+        }
+
+        uint32 const owner = player->GetGUID().GetCounter();
+        handler->PSendSysMessage("Arena bot lockcheck [{}v{}], owner {}:", uint32(arenaType), uint32(arenaType), owner);
+        for (ArenaBotRosterSlot const& slot : roster)
+        {
+            bool const lockedForOther = BotDataMgr::IsArenaBotLockedForOwner(slot.botEntry, owner);
+            handler->PSendSysMessage(" - slot {}: entry {} class {} spec {} | lock={}",
+                uint32(slot.slot), uint32(slot.botEntry), uint32(slot.botClass), uint32(slot.botSpec),
+                lockedForOther ? "OTHER_OWNER" : "SELF_OR_FREE");
+        }
         return true;
     }
 

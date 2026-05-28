@@ -12,6 +12,7 @@
 #include <set>
 #include <shared_mutex>
 #include <string>
+#include <string_view>
 
 class BattlegroundQueue;
 class Creature;
@@ -202,6 +203,14 @@ using ItemPerSlot = std::array<ItemLeveledArr, BOT_INVENTORY_SIZE>;
 using ItemPerBotClassMap = std::array<ItemPerSlot, BOT_CLASS_END>;
 using ItemPerBotClassPerBotCategoryMap = std::array<ItemPerBotClassMap, BOT_GENERATION_CATEGORIES_COUNT>;
 
+struct ArenaBotRosterSlot
+{
+    uint8 slot = 0;
+    uint32 botEntry = 0;
+    uint8 botClass = BOT_CLASS_NONE;
+    uint8 botSpec = BOT_SPEC_DEFAULT;
+};
+
 class BotDataMgr
 {
 public:
@@ -209,6 +218,8 @@ public:
     static void UpdateWandererLogSampler(uint32 diff);
     static void UpdateWandererGridRecycle(uint32 diff);
     static void TryReplenishWanderingBots();
+    // By leewheel 20260528 - wandering bots map activity gate (world-map dormancy mode)
+    static bool IsWandererMapActive(uint32 mapId);
     static void DisableAndDespawnWanderer(Creature* bot, char const* reason);
 
     static void LoadNpcBots(bool spawn = true);
@@ -320,6 +331,15 @@ public:
     static void EraseNpcBotMgrData(ObjectGuid playerGuid);
     static void RemoveNpcBotMgrDataFromDB(ObjectGuid playerGuid);
     static void SaveNpcBotMgrData(ObjectGuid playerGuid, CharacterDatabaseTransaction trans);
+
+    // By leewheel 20260528 - Arena bots persistent profile/roster backend (for skirmish + rated flows).
+    static bool EnsureArenaBotProfile(ObjectGuid playerGuid, uint8 bracketType, std::string_view teamName);
+    static void SetArenaBotTeamName(ObjectGuid playerGuid, uint8 bracketType, std::string_view teamName);
+    static std::string GetArenaBotTeamName(ObjectGuid playerGuid, uint8 bracketType);
+    static std::vector<ArenaBotRosterSlot> GetArenaBotRoster(ObjectGuid playerGuid, uint8 bracketType);
+    static void SaveArenaBotRoster(ObjectGuid playerGuid, uint8 bracketType, std::vector<ArenaBotRosterSlot> const& roster);
+    static uint32 GenerateArenaRosterBots(Player const* leader, uint8 arenaType, uint8 desiredBotCount = 0);
+    static bool IsArenaBotLockedForOwner(uint32 botEntry, uint32 ownerGuidLow);
 
     static std::shared_mutex* GetLock();
 };

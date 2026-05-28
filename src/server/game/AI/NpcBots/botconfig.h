@@ -137,6 +137,18 @@ public:
     static uint8 GetNpcBotMountLevel60();
     static uint8 GetNpcBotMountLevel100();
     static int32 GetBotInfoPacketsLimit();
+    static bool IsBotChatEnabled();
+    static bool IsBotChatWorldEnabled();
+    static bool IsBotChatPartyEnabled();
+    static bool IsBotChatRaidEnabled();
+    static uint32 GetBotChatIntervalMinMs();
+    static uint32 GetBotChatIntervalMaxMs();
+    static uint32 GetBotChatGlobalMaxPerMinute();
+    static uint32 GetBotChatBotCooldownMs();
+    static std::string const& GetBotChatWorldChannelName();
+    static bool IsBotChatLLMEnabled();
+    static std::string const& GetBotChatLLMModelPath();
+    static std::string const& GetBotChatLLMModelName();
 
     static uint32 GetNpcBotCostRent(uint8 level, uint8 botclass);
     static uint32 GetNpcBotCostHire(uint8 level, uint8 botclass);

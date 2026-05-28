@@ -41,6 +41,19 @@ static uint8 _rangedDpsTargetIconFlags;
 static uint8 _noDpsTargetIconFlags;
 static uint8 _npcBotOwnerExpireMode;
 static int32 _botInfoPacketsLimit;
+// By leewheel 20260528 - NPCBot autonomous chat configuration.
+static bool _botChatEnable;
+static bool _botChatWorldEnable;
+static bool _botChatPartyEnable;
+static bool _botChatRaidEnable;
+static bool _botChatLLMEnable;
+static uint32 _botChatIntervalMinMs;
+static uint32 _botChatIntervalMaxMs;
+static uint32 _botChatGlobalMaxPerMinute;
+static uint32 _botChatBotCooldownMs;
+static std::string _botChatWorldChannelName;
+static std::string _botChatLLMModelPath;
+static std::string _botChatLLMModelName;
 static uint32 _gearBankCapacity;
 static uint32 _gearBankEquipmentSetsCount;
 static uint32 _npcBotsCostHire;
@@ -380,6 +393,19 @@ private:
         _limitNpcBotsRaids              = sConfigMgr->GetBoolDefault("NpcBot.Limit.Raid", true);
         _hideSpawns                     = sConfigMgr->GetBoolDefault("NpcBot.HideSpawns", false);
         _botInfoPacketsLimit            = sConfigMgr->GetIntDefault("NpcBot.InfoPacketsLimit", -1);
+        // By leewheel 20260528 - load NPCBot channel-chat settings.
+        _botChatEnable                  = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable", false);
+        _botChatWorldEnable             = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable.World", true);
+        _botChatPartyEnable             = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable.Party", true);
+        _botChatRaidEnable              = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable.Raid", true);
+        _botChatLLMEnable               = sConfigMgr->GetBoolDefault("NpcBot.Chat.LLM.Enable", false);
+        _botChatIntervalMinMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MinMs", 30000)));
+        _botChatIntervalMaxMs           = uint32(std::max<int32>(int32(_botChatIntervalMinMs), sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MaxMs", 90000)));
+        _botChatGlobalMaxPerMinute      = uint32(std::max<int32>(1, sConfigMgr->GetIntDefault("NpcBot.Chat.Global.MaxPerMinute", 20)));
+        _botChatBotCooldownMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.BotCooldownMs", 45000)));
+        _botChatWorldChannelName        = sConfigMgr->GetStringDefault("NpcBot.Chat.WorldChannelName", "World");
+        _botChatLLMModelPath            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelPath", "");
+        _botChatLLMModelName            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelName", "");
         _npcBotsCostHire                = sConfigMgr->GetIntDefault("NpcBot.Cost.Hire", 1000000);
         _npcBotsCostRent                = sConfigMgr->GetIntDefault("NpcBot.Cost.Rent", 0);
         _npcBotUpdateDelayBase          = sConfigMgr->GetIntDefault("NpcBot.UpdateDelay.Base", 0);
@@ -1215,6 +1241,55 @@ uint8 BotCfg::GetMaxNpcBotsQuickGroup(uint8 /*level*/)
 int32 BotCfg::GetBotInfoPacketsLimit()
 {
     return _botInfoPacketsLimit;
+}
+bool BotCfg::IsBotChatEnabled()
+{
+    return _botChatEnable;
+}
+bool BotCfg::IsBotChatWorldEnabled()
+{
+    return _botChatWorldEnable;
+}
+bool BotCfg::IsBotChatPartyEnabled()
+{
+    return _botChatPartyEnable;
+}
+bool BotCfg::IsBotChatRaidEnabled()
+{
+    return _botChatRaidEnable;
+}
+uint32 BotCfg::GetBotChatIntervalMinMs()
+{
+    return _botChatIntervalMinMs;
+}
+uint32 BotCfg::GetBotChatIntervalMaxMs()
+{
+    return _botChatIntervalMaxMs;
+}
+uint32 BotCfg::GetBotChatGlobalMaxPerMinute()
+{
+    return _botChatGlobalMaxPerMinute;
+}
+uint32 BotCfg::GetBotChatBotCooldownMs()
+{
+    return _botChatBotCooldownMs;
+}
+std::string const& BotCfg::GetBotChatWorldChannelName()
+{
+    return _botChatWorldChannelName;
+}
+bool BotCfg::IsBotChatLLMEnabled()
+{
+    return _botChatLLMEnable;
+}
+std::string const& BotCfg::GetBotChatLLMModelPath()
+{
+    return _botChatLLMModelPath;
+}
+
+std::string const& BotCfg::GetBotChatLLMModelName()
+{
+    return _botChatLLMModelName;
 }
 
 float BotCfg::GetBotDamageModPhysical()

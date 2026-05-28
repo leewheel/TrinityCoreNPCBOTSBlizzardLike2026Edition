@@ -174,7 +174,7 @@ namespace
         }
     }
 
-    void SendBotStatsPacket(Player* player, NpcBotStats const& stats)
+    void SendBotStatsPacket(Player* player, NpcBotStats const& stats, float resiliencePct)
     {
         std::ostringstream ss;
         ss << "S;" << stats.entry
@@ -203,7 +203,8 @@ namespace
            << ';' << stats.hastePct
            << ';' << stats.hitBonusPct
            << ';' << stats.expertise
-           << ';' << stats.armorPenPct;
+           << ';' << stats.armorPenPct
+           << ';' << resiliencePct;
 
         SendBMU(player, ss.str());
     }
@@ -216,7 +217,8 @@ namespace
 
         NpcBotStats stats{};
         bot->GetBotAI()->FillNpcBotStats(stats);
-        SendBotStatsPacket(player, stats);
+        // By leewheel 20260528 - expose bot resilience value to BMU addon stats panel.
+        SendBotStatsPacket(player, stats, bot->GetBotAI()->GetBotResilience());
     }
 
     void AppendItemExtraFields(std::ostringstream& ss, Item const* item)

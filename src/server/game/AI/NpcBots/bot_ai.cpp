@@ -6044,7 +6044,9 @@ void bot_ai::_updateStandState() const
 {
     if (IAmFree())
     {
-        if (CanSit() && !IsWanderer())
+        // By leewheel 20260528 - allow wanderers to sit while map is dormant (no players on this world map).
+        bool const dormantWandererMap = IsWanderer() && me->GetMap()->GetEntry()->IsWorldMap() && !BotDataMgr::IsWandererMapActive(me->GetMapId());
+        if (CanSit() && (!IsWanderer() || dormantWandererMap))
         {
             if (_atHome && !_evadeMode && !me->IsInCombat() && !me->isMoving() &&
                 me->IsStandState() && Rand() < 15)
@@ -12952,29 +12954,22 @@ bool bot_ai::_isItemFitForGeneratedBot([[maybe_unused]] uint8 category, uint8 sl
     {
         if (me->GetMap()->IsBattlegroundOrArena())
         {
-            if (Rand() < 50)
+            // By leewheel 20260528 - arena/bg hard policy: generated armor set must carry resilience.
+            switch (slot)
             {
-                if (Rand() < 20 && proto->ItemLevel < 245)
-                    return false;
-                if (Rand() < 10 && proto->ItemLevel < 264)
-                    return false;
-
-                switch (slot)
-                {
-                    case BOT_SLOT_HEAD:
-                    case BOT_SLOT_SHOULDERS:
-                    case BOT_SLOT_CHEST:
-                    case BOT_SLOT_WAIST:
-                    case BOT_SLOT_LEGS:
-                    case BOT_SLOT_FEET:
-                    case BOT_SLOT_WRIST:
-                    case BOT_SLOT_HANDS:
-                        if (!item_has_stat(proto, ITEM_MOD_RESILIENCE_RATING))
-                            return false;
-                        break;
-                    default:
-                        break;
-                }
+                case BOT_SLOT_HEAD:
+                case BOT_SLOT_SHOULDERS:
+                case BOT_SLOT_CHEST:
+                case BOT_SLOT_WAIST:
+                case BOT_SLOT_LEGS:
+                case BOT_SLOT_FEET:
+                case BOT_SLOT_WRIST:
+                case BOT_SLOT_HANDS:
+                    if (!item_has_stat(proto, ITEM_MOD_RESILIENCE_RATING))
+                        return false;
+                    break;
+                default:
+                    break;
             }
         }
 
@@ -18848,6 +18843,25 @@ void bot_ai::Evade()
     if (HasBotCommandState(BOT_COMMAND_MASK_UNMOVING))
         return;
 
+    // By leewheel 20260528 - world-map wanderers enter dormant mode when no players are on their map.
+    // World-map wanderers enter dormant mode when no players are on their map:
+    // no roaming, keep idle/sit; they will wake automatically once a player appears.
+    if (IsWanderer() && me->GetMap()->GetEntry()->IsWorldMap() && !BotDataMgr::IsWandererMapActive(me->GetMapId()) &&
+        !me->IsInCombat() && me->getAttackers().empty())
+    {
+        if (me->isMoving())
+        {
+            me->StopMoving();
+            me->GetMotionMaster()->MoveIdle();
+        }
+        _evadeMode = false;
+        _evadeCount = 0;
+        evadeDelayTimer = 3000;
+        if (CanSit() && me->GetStandState() != UNIT_STAND_STATE_SIT)
+            me->SetStandState(UNIT_STAND_STATE_SIT);
+        return;
+    }
+
     //delay evade
     if (evadeDelayTimer == 0 && me->GetMap()->GetEntry()->IsContinent())
     {
@@ -19265,6 +19279,9 @@ bool bot_ai::FinishTeleport(bool reset)
             uint32 flag_spell = teamId == TEAM_ALLIANCE ? master->GetTeamId() == TEAM_HORDE ? ARENA_FLAG_TEAM_H_GOLD : ARENA_FLAG_TEAM_A_GOLD :
                 master->GetTeamId() == TEAM_HORDE ? ARENA_FLAG_TEAM_H_GREEN : ARENA_FLAG_TEAM_A_GREEN;
             me->CastSpell(me, flag_spell, true);
+
+            // By leewheel 20260528 - upon entering arena, force-refresh to pvp/resilience-oriented generated equips.
+            ApplyServiceRandomEquip();
         }
 
         //update group member online state

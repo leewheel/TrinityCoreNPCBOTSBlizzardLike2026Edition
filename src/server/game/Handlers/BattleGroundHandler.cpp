@@ -31,6 +31,7 @@
 #include "DisableMgr.h"
 #include "GameTime.h"
 #include "Group.h"
+#include "GroupMgr.h"
 #include "Language.h"
 #include "Log.h"
 #include "NPCPackets.h"
@@ -602,10 +603,6 @@ void WorldSession::HandleRequestBattlefieldStatusOpcode(WorldPackets::Battlegrou
 
 void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::BattlemasterJoinArena& packet)
 {
-    // ignore if rated but queued solo
-    if (packet.IsRated && !packet.JoinAsGroup)
-        return;
-
     // ignore if we already in BG or BG queue
     if (_player->InBattleground())
         return;
@@ -615,6 +612,45 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
         return;
 
     uint8 arenatype = ArenaTeam::GetTypeBySlot(packet.TeamSizeIndex);
+    if (arenatype != ARENA_TEAM_2v2 && arenatype != ARENA_TEAM_3v3 && arenatype != ARENA_TEAM_5v5)
+        return;
+
+    // By leewheel 20260528 - initialize NPCBot arena profile/roster from battlemaster entry.
+    // First create is fixed (subsequent joins reuse same bracket roster unless explicitly overwritten by future UI flow).
+    {
+        std::string teamName = _player->GetName();
+        teamName += " Arena";
+        BotDataMgr::EnsureArenaBotProfile(_player->GetGUID(), arenatype, teamName);
+
+        std::vector<ArenaBotRosterSlot> roster = BotDataMgr::GetArenaBotRoster(_player->GetGUID(), arenatype);
+        uint8 const needBots = arenatype > 0 ? (arenatype - 1) : 0;
+        if (roster.size() != needBots)
+        {
+            roster.clear();
+            // By leewheel 20260528 - arena fairness: standard classes only, no hero/extra classes.
+            std::vector<uint8> candidates = {
+                BOT_CLASS_WARRIOR, BOT_CLASS_PALADIN, BOT_CLASS_HUNTER, BOT_CLASS_ROGUE, BOT_CLASS_PRIEST,
+                BOT_CLASS_DEATH_KNIGHT, BOT_CLASS_SHAMAN, BOT_CLASS_MAGE, BOT_CLASS_WARLOCK, BOT_CLASS_DRUID
+            };
+
+            for (uint8 i = 0; i < needBots && !candidates.empty(); ++i)
+            {
+                uint32 const pick = urand(0, uint32(candidates.size() - 1));
+                uint8 const botClass = candidates[pick];
+                candidates.erase(candidates.begin() + pick);
+
+                ArenaBotRosterSlot slot;
+                slot.slot = i;
+                slot.botClass = botClass;
+                // Arena policy: DPS-only spec on first fixed roster create.
+                slot.botSpec = BotDataMgr::SelectBotSpecForRoles(botClass, BOT_ROLE_DPS);
+                roster.push_back(slot);
+            }
+
+            if (!roster.empty())
+                BotDataMgr::SaveArenaBotRoster(_player->GetGUID(), arenatype, roster);
+        }
+    }
     uint32 arenaRating = 0;
     uint32 matchmakerRating = 0;
     uint32 previousOpponents = 0;
@@ -657,7 +693,51 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
 
 
     Group* grp = _player->GetGroup();
-    if (!packet.JoinAsGroup)
+    bool arenaBotQueueMode = (arenatype == ARENA_TEAM_2v2 || arenatype == ARENA_TEAM_3v3 || arenatype == ARENA_TEAM_5v5);
+
+    // By leewheel 20260528 - auto-build fixed arena roster companions from battlemaster flow.
+    if (arenaBotQueueMode)
+    {
+        if (!grp)
+        {
+            Group* newGroup = new Group;
+            if (!newGroup->Create(_player))
+            {
+                delete newGroup;
+                return;
+            }
+            sGroupMgr->AddGroup(newGroup);
+            grp = newGroup;
+        }
+
+        uint8 botCount = 0;
+        for (GroupBotReference const* itr = grp->GetFirstBotMember(); itr != nullptr; itr = itr->next())
+            if (Creature const* cbot = itr->GetSource())
+            {
+                ++botCount;
+                // By leewheel 20260528 - arena policy: existing group bots are forced to DPS-only talents/spec.
+                BotMgr::SetRandomBotTalentsForGroup(cbot, BOT_ROLE_DPS);
+            }
+
+        uint8 playerCount = 0;
+        for (GroupReference const* itr = grp->GetFirstMember(); itr != nullptr; itr = itr->next())
+            if (itr->GetSource())
+                ++playerCount;
+
+        uint8 const needBots = (arenatype > playerCount) ? uint8(arenatype - playerCount) : 0;
+        if (botCount < needBots)
+            BotDataMgr::GenerateArenaRosterBots(_player, arenatype, needBots - botCount);
+
+        grp = _player->GetGroup();
+    }
+
+    bool joinAsGroup = packet.JoinAsGroup || (arenaBotQueueMode && grp && grp->GetFirstBotMember() != nullptr);
+
+    // rated arena still requires grouped queue.
+    if (packet.IsRated && !joinAsGroup)
+        return;
+
+    if (!joinAsGroup)
     {
         if (_player->isUsingLfg())
         {
@@ -685,7 +765,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
             return;
 
         //npcbot: do not allow entering as group if there are bots in group
-        if (have_bots_in_group)
+        if (have_bots_in_group && !arenaBotQueueMode)
         {
             WorldPackets::Battleground::BattlefieldStatusFailed battlefieldStatus;
             BattlegroundMgr::BuildBattlegroundStatusFailed(&battlefieldStatus, ERR_BATTLEGROUND_JOIN_FAILED);
@@ -716,8 +796,11 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
             return;
         }
 
+        if (arenaBotQueueMode)
+            BotDataMgr::SetArenaBotTeamName(_player->GetGUID(), arenatype, at->GetName());
+
         //npcbot: do not allow bots in rated matches
-        if (have_bots_in_group)
+        if (have_bots_in_group && !arenaBotQueueMode)
         {
             WorldPackets::Battleground::BattlefieldStatusFailed battlefieldStatus;
             BattlegroundMgr::BuildBattlegroundStatusFailed(&battlefieldStatus, ERR_BATTLEGROUND_JOIN_TIMED_OUT);
@@ -738,7 +821,7 @@ void WorldSession::HandleBattlemasterJoinArena(WorldPackets::Battleground::Battl
     }
 
     BattlegroundQueue& bgQueue = sBattlegroundMgr->GetBattlegroundQueue(bgQueueTypeId);
-    if (packet.JoinAsGroup)
+    if (joinAsGroup)
     {
         uint32 avgTime = 0;
         GroupQueueInfo* ginfo = nullptr;

@@ -880,8 +880,11 @@ BotAddResult BotMgr::AddDungeonBot(Creature* bot)
     bot->GetBotAI()->ApplyServiceRandomEquip(); // By leewheel 20260523 - auto best gear on LFG join
     ApplyServiceBotDefaultAutoloot(bot); // By leewheel 20260524 - autoloot on by default
 
-    uint32 lfg_roles = BotDataMgr::BotToLFGRoles(bot->GetBotAI()->GetBotRoles());
-    _owner->GetGroup()->SetLfgRoles(bot->GetGUID(), lfg_roles);
+    if (Group* ownerGroup = _owner->GetGroup())
+    {
+        uint32 lfg_roles = BotDataMgr::BotToLFGRoles(bot->GetBotAI()->GetBotRoles());
+        ownerGroup->SetLfgRoles(bot->GetGUID(), lfg_roles);
+    }
 
     return BOT_ADD_SUCCESS;
 }

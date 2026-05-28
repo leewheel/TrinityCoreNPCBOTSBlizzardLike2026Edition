@@ -1,4 +1,5 @@
 -- Quest 900 "Samophlange" (什么什么平衡器) - Venture Co. research station valves
+-- By leewheel 20260528 - keep 61936 map-wide position/state fix (do not pin to single guid).
 -- TDB incorrectly set GO_FLAG_INTERACT_COND (4) on the three valves; clients cannot click them.
 -- Fuel Control Valve (61936) also had wrong lockId (93, copied from Control Console) and no SAI.
 
@@ -6,7 +7,7 @@ UPDATE `gameobject_template_addon` SET `flags`=0 WHERE `entry` IN (4072, 61935, 
 
 UPDATE `gameobject_template` SET `displayId`=755, `size`=2, `Data0`=43, `Data1`=900, `Data13`=1, `AIName`='SmartGameObjectAI' WHERE `entry`=61936;
 
-UPDATE `gameobject` SET `state`=0, `position_x`=841.75, `position_y`=-2686.35, `position_z`=93.65 WHERE `guid`=15731 AND `id`=61936;
+UPDATE `gameobject` SET `state`=0, `position_x`=841.75, `position_y`=-2686.35, `position_z`=93.65 WHERE `id`=61936 AND `map`=1;
 
 DELETE FROM `smart_scripts` WHERE `entryorguid`=61936 AND `source_type`=1;
 INSERT INTO `smart_scripts` (`entryorguid`, `source_type`, `id`, `link`, `event_type`, `event_phase_mask`, `event_chance`, `event_flags`, `event_param1`, `event_param2`, `event_param3`, `event_param4`, `action_type`, `action_param1`, `action_param2`, `action_param3`, `action_param4`, `action_param5`, `action_param6`, `target_type`, `target_param1`, `target_param2`, `target_param3`, `target_x`, `target_y`, `target_z`, `target_o`, `comment`) VALUES

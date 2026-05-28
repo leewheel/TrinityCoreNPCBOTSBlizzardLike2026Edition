@@ -58,6 +58,20 @@ if(TARGET efsw)
       efsw)
 endif()
 
+if(WITH_NPCBOT_LLM_EMBED)
+  if(TARGET llama)
+    target_link_libraries(game
+      PRIVATE
+        llama)
+    target_compile_definitions(game PRIVATE TRINITY_NPCBOT_LLM_EMBED=1)
+  elseif(TARGET ggml)
+    target_link_libraries(game
+      PRIVATE
+        ggml)
+    target_compile_definitions(game PRIVATE TRINITY_NPCBOT_LLM_EMBED=1)
+  endif()
+endif()
+
 set_target_properties(game
   PROPERTIES
     COMPILE_WARNING_AS_ERROR ${WITH_WARNINGS_AS_ERRORS}

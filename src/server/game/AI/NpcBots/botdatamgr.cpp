@@ -1,6 +1,7 @@
 #include "BattlegroundMgr.h"
 #include "BattlegroundQueue.h"
 #include "bot_ai.h"
+#include "bot_chat_llm.h"
 #include "botconfig.h"
 #include "botdatamgr.h"
 #include "botgearscore.h"
@@ -15,7 +16,9 @@
 #include "Creature.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
+#include "ChatPackets.h"
 #include "GameTime.h"
+#include "Group.h"
 #include "GroupMgr.h"
 #include "Item.h"
 #include "LFGMgr.h"
@@ -34,7 +37,9 @@
 #include "Util.h"
 
 #include <algorithm>
+#include <cmath>
 #include <numeric>
+#include <deque>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -133,6 +138,207 @@ static NpcBotRegistry _existingBots;
 static std::map<uint32, uint8> _wpMinSpawnLevelPerMapId;
 static std::map<uint32, uint8> _wpMaxSpawnLevelPerMapId;
 static std::map<uint8, std::set<uint32>> _spareBotIdsPerClassMap;
+static std::unordered_map<uint32, uint32> _arenaBotOwnerLockMap;
+static bool _arenaBotOwnerLockMapLoaded = false;
+static std::unordered_map<uint32, std::string> _botChatPersonaByEntry;
+static bool _botChatPersonaLoaded = false;
+static std::unordered_map<uint32, uint32> _botChatCooldownUntilMs;
+static std::deque<uint32> _botChatGlobalSayMs;
+static uint32 _botChatTickerMs = 0;
+
+static void ReloadArenaBotOwnerLocks()
+{
+    // By leewheel 20260528 - arena fixed-roster bot ownership lock map (bot_entry -> owner_guid).
+    _arenaBotOwnerLockMap.clear();
+    QueryResult res = CharacterDatabase.Query("SELECT bot_entry, owner_guid FROM characters_npcbot_arena_roster WHERE bot_entry > 0");
+    if (!res)
+    {
+        _arenaBotOwnerLockMapLoaded = true;
+        return;
+    }
+
+    do
+    {
+        Field* fields = res->Fetch();
+        _arenaBotOwnerLockMap[fields[0].GetUInt32()] = fields[1].GetUInt32();
+    } while (res->NextRow());
+
+    _arenaBotOwnerLockMapLoaded = true;
+}
+
+static uint32 GetArenaBotLockOwner(uint32 botEntry)
+{
+    if (!_arenaBotOwnerLockMapLoaded)
+        ReloadArenaBotOwnerLocks();
+
+    auto itr = _arenaBotOwnerLockMap.find(botEntry);
+    return itr != _arenaBotOwnerLockMap.end() ? itr->second : 0;
+}
+
+static void ReloadBotChatPersonas()
+{
+    _botChatPersonaByEntry.clear();
+    QueryResult res = CharacterDatabase.Query("SELECT bot_entry, style_prompt FROM characters_npcbot_chat_persona WHERE enabled = 1");
+    if (!res)
+    {
+        _botChatPersonaLoaded = true;
+        return;
+    }
+
+    do
+    {
+        Field* fields = res->Fetch();
+        _botChatPersonaByEntry[fields[0].GetUInt32()] = fields[1].GetString();
+    } while (res->NextRow());
+    _botChatPersonaLoaded = true;
+}
+
+static bool ContainsBlockedPoliticalTerms(std::string_view text)
+{
+    static std::array<std::string_view, 7> const blocked = { "政治", "政党", "政府", "国家主席", "选举", "外交", "意识形态" };
+    return std::ranges::any_of(blocked, [text](std::string_view term) { return text.find(term) != std::string_view::npos; });
+}
+
+static bool LooksMostlyChinese(std::string_view text)
+{
+    if (text.empty())
+        return false;
+    uint32 ascii = 0;
+    for (unsigned char c : text)
+        if (c < 0x80)
+            ++ascii;
+    return ascii < (text.size() * 3 / 4);
+}
+
+static std::string BuildBotChatTemplate(Creature const* bot)
+{
+    std::string action = "休息中";
+    if (bot->IsInCombat())
+        action = "正在战斗";
+    else if (bot->isMoving())
+        action = "正在移动";
+
+    std::string persona;
+    if (!_botChatPersonaLoaded)
+        ReloadBotChatPersonas();
+    if (auto itr = _botChatPersonaByEntry.find(bot->GetEntry()); itr != _botChatPersonaByEntry.end())
+        persona = itr->second;
+
+    if (persona.empty())
+    {
+        if (NpcBotExtras const* ex = BotDataMgr::SelectNpcBotExtras(bot->GetEntry()))
+            persona = Bcore::StringFormat("我是{}职业机器人，当前{}。", uint32(ex->bclass), action);
+        else
+            persona = Bcore::StringFormat("我是机器人，当前{}。", action);
+    }
+    else
+        persona = Bcore::StringFormat("{} 当前{}。", persona, action);
+
+    std::string llmReply;
+    if (NpcBotChatLLM::Engine::Instance().IsEnabled())
+        llmReply = NpcBotChatLLM::Engine::Instance().GenerateReply(bot, persona);
+    if (!llmReply.empty())
+        persona = std::move(llmReply);
+
+    // By leewheel 20260528 - lightweight safe gate (Chinese + no politics).
+    if (!LooksMostlyChinese(persona) || ContainsBlockedPoliticalTerms(persona))
+        return "今天天气不错，我们继续冒险吧。";
+    return persona;
+}
+
+static void SendBotMessageToGroup(Creature const* bot, Group const* group, bool isRaid, std::string const& text)
+{
+    if (!group)
+        return;
+    for (GroupReference const* itr = group->GetFirstMember(); itr; itr = itr->next())
+    {
+        Player* member = itr->GetSource();
+        if (!member || !member->GetSession())
+            continue;
+        WorldPackets::Chat::Chat packet;
+        packet.Initialize(isRaid ? CHAT_MSG_RAID : CHAT_MSG_PARTY, LANG_UNIVERSAL, bot, member, text);
+        member->SendDirectMessage(packet.Write());
+    }
+}
+
+static void TryBotChannelChat(uint32 diff)
+{
+    if (!BotCfg::IsBotChatEnabled())
+        return;
+
+    _botChatTickerMs += diff;
+    if (_botChatTickerMs < 1000)
+        return;
+    _botChatTickerMs = 0;
+
+    uint32 const nowMs = uint32(GameTime::GetGameTimeMS().count());
+    while (!_botChatGlobalSayMs.empty() && (nowMs - _botChatGlobalSayMs.front()) > 60000)
+        _botChatGlobalSayMs.pop_front();
+    if (_botChatGlobalSayMs.size() >= BotCfg::GetBotChatGlobalMaxPerMinute())
+        return;
+
+    std::vector<Creature const*> candidates;
+    candidates.reserve(32);
+    for (Creature const* bot : _existingBots)
+    {
+        if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
+            continue;
+        if (_botChatCooldownUntilMs[bot->GetEntry()] > nowMs)
+            continue;
+        candidates.push_back(bot);
+    }
+    if (candidates.empty())
+        return;
+    Creature const* bot = candidates[urand(0, uint32(candidates.size() - 1))];
+    std::string msg = BuildBotChatTemplate(bot);
+
+    bool sent = false;
+    if (Player const* owner = bot->GetBotOwner())
+    {
+        if (Group const* group = owner->GetGroup())
+        {
+            if (group->isRaidGroup() && BotCfg::IsBotChatRaidEnabled())
+            {
+                SendBotMessageToGroup(bot, group, true, msg);
+                sent = true;
+            }
+            else if (BotCfg::IsBotChatPartyEnabled())
+            {
+                SendBotMessageToGroup(bot, group, false, msg);
+                sent = true;
+            }
+        }
+    }
+
+    if (!sent && bot->IsWandererBot() && BotCfg::IsBotChatWorldEnabled())
+    {
+        // No dedicated channel membership for creatures in core; broadcast to nearby players as world-like global text packet.
+        for (MapReference const& ref : bot->GetMap()->GetPlayers())
+        {
+            Player* player = ref.GetSource();
+            if (!player || !player->GetSession())
+                continue;
+            WorldPackets::Chat::Chat packet;
+            packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, msg, 0, BotCfg::GetBotChatWorldChannelName());
+            player->SendDirectMessage(packet.Write());
+        }
+        sent = true;
+    }
+
+    if (sent)
+    {
+        _botChatGlobalSayMs.push_back(nowMs);
+        uint32 const next = urand(BotCfg::GetBotChatIntervalMinMs(), BotCfg::GetBotChatIntervalMaxMs());
+        _botChatCooldownUntilMs[bot->GetEntry()] = nowMs + std::max(next, BotCfg::GetBotChatBotCooldownMs());
+    }
+}
+
+static bool IsArenaBotLockedForOwnerImpl(uint32 botEntry, uint32 ownerGuidLow)
+{
+    // By leewheel 20260528 - arena locked bot can only be reused by the same owner.
+    uint32 const lockOwner = GetArenaBotLockOwner(botEntry);
+    return lockOwner != 0 && lockOwner != ownerGuidLow;
+}
 static CreatureTemplateContainer _botsExtraCreatureTemplates;
 static std::unordered_map<uint32, EquipmentInfo const*> _botsExtraCreatureEquipmentTemplates;
 static std::set<uint32> _botsExtraCreaturesToDespawn;
@@ -275,6 +481,16 @@ static void SpawnWandererBot(uint32 bot_id, WanderNode const* spawnLoc, NpcBotRe
     Map* map = sMapMgr->CreateBaseMap(spawnLoc->GetMapId());
     // Do not call LoadGrid here: it pins grids without unload. AddToWorld loads the cell as needed.
 
+    // Fix bad/old waypoint Z to avoid "spawn in air/underground -> only shadow or pop-in".
+    float const groundZ = map->GetHeight(spawnPos.GetPositionX(), spawnPos.GetPositionY(), spawnPos.GetPositionZ() + 5.0f, true, 50.0f);
+    if (groundZ > INVALID_HEIGHT)
+    {
+        if (std::fabs(groundZ - spawnPos.GetPositionZ()) > 2.0f)
+            BOT_LOG_DEBUG("npcbots", "Wanderer spawn Z corrected: bot {} map {} ({:.2f},{:.2f}) z {:.2f} -> {:.2f}",
+                bot_id, map->GetId(), spawnPos.GetPositionX(), spawnPos.GetPositionY(), spawnPos.GetPositionZ(), groundZ);
+        spawnPos.m_positionZ = groundZ + 0.15f;
+    }
+
     Creature* bot = new Creature();
     if (!bot->LoadBotCreatureFromDB(0, map, true, true, bot_id, &spawnPos))
     {
@@ -364,6 +580,30 @@ struct WanderingBotsGenerator
 {
 private:
     using NodeVec = std::vector<WanderNode const*>;
+    static constexpr float MIN_WANDERER_SPAWN_DIST_TO_PLAYER = 120.0f;
+
+    static bool IsSpawnNodeTooCloseToPlayers(WanderNode const* node, float minDist)
+    {
+        if (!node)
+            return true;
+
+        Map* map = sMapMgr->CreateBaseMap(node->GetMapId());
+        if (!map || !map->HavePlayers())
+            return false;
+
+        float const minDistSq = minDist * minDist;
+        for (MapReference const& ref : map->GetPlayers())
+        {
+            Player* player = ref.GetSource();
+            if (!player || !player->IsInWorld() || player->IsGameMaster())
+                continue;
+
+            if (player->GetExactDist2dSq(node->m_positionX, node->m_positionY) < minDistSq)
+                return true;
+        }
+
+        return false;
+    }
 
     const std::map<uint8, uint32> wbot_faction_for_ex_class = {
         {BOT_CLASS_BM, FACTION_TEMPLATE_NEUTRAL_HOSTILE/*2u*/},
@@ -497,7 +737,17 @@ private:
         }
 
         ASSERT(!level_nodes.empty());
-        WanderNode const* spawnLoc = Bcore::Containers::SelectRandomContainerElement(level_nodes);
+
+        // Prefer nodes not close to players to avoid "bot pops into existence next to me".
+        NodeVec far_nodes;
+        far_nodes.reserve(level_nodes.size());
+        for (WanderNode const* node : level_nodes)
+        {
+            if (!IsSpawnNodeTooCloseToPlayers(node, MIN_WANDERER_SPAWN_DIST_TO_PLAYER))
+                far_nodes.push_back(node);
+        }
+
+        WanderNode const* spawnLoc = Bcore::Containers::SelectRandomContainerElement(far_nodes.empty() ? level_nodes : far_nodes);
 
         CreatureTemplate& bot_template = _botsExtraCreatureTemplates[next_bot_id];
         //copy all fields
@@ -809,6 +1059,9 @@ public:
 
             for (const uint32 spareBotId : spare_bots)
             {
+                if (IsArenaBotLockedForOwnerImpl(spareBotId, owner->GetGUID().GetCounter()))
+                    continue;
+
                 if (BotCfg::FilterRaces())
                 {
                     NpcBotExtras const* orig_extras = ASSERT_NOTNULL(BotDataMgr::SelectNpcBotExtras(spareBotId));
@@ -876,6 +1129,118 @@ public:
         }
 
         return true;
+    }
+
+    uint32 GenerateArenaBotsToSpawn(Player const* owner, uint8 arenaType, uint8 desiredBots, std::vector<ArenaBotRosterSlot>& roster, bool& rosterChanged)
+    {
+        if (!owner || arenaType < 2 || arenaType > 5 || _spareBotIdsPerClassMap.empty())
+            return 0;
+        auto isArenaAllowedClass = [](uint8 botClass) -> bool
+        {
+            // By leewheel 20260528 - arena fairness policy: disallow hero/extra classes in arena teams.
+            return botClass >= BOT_CLASS_WARRIOR && botClass < BOT_CLASS_EX_START;
+        };
+
+        // By leewheel 20260528 - strict arena DPS-only spec resolver (exclude tank/heal specs).
+        auto selectArenaDpsSpecForClass = [](uint8 botClass) -> uint8
+        {
+            switch (botClass)
+            {
+                case BOT_CLASS_WARRIOR:      return urand(0, 1) ? BOT_SPEC_WARRIOR_ARMS : BOT_SPEC_WARRIOR_FURY;
+                case BOT_CLASS_PALADIN:      return BOT_SPEC_PALADIN_RETRIBUTION;
+                case BOT_CLASS_HUNTER:       return Bcore::Containers::SelectRandomContainerElement(std::array<uint8, 3>{ BOT_SPEC_HUNTER_BEASTMASTERY, BOT_SPEC_HUNTER_MARKSMANSHIP, BOT_SPEC_HUNTER_SURVIVAL });
+                case BOT_CLASS_ROGUE:        return Bcore::Containers::SelectRandomContainerElement(std::array<uint8, 3>{ BOT_SPEC_ROGUE_ASSASINATION, BOT_SPEC_ROGUE_COMBAT, BOT_SPEC_ROGUE_SUBTLETY });
+                case BOT_CLASS_PRIEST:       return BOT_SPEC_PRIEST_SHADOW;
+                case BOT_CLASS_DEATH_KNIGHT: return BOT_SPEC_DK_UNHOLY;
+                case BOT_CLASS_SHAMAN:       return urand(0, 1) ? BOT_SPEC_SHAMAN_ELEMENTAL : BOT_SPEC_SHAMAN_ENHANCEMENT;
+                case BOT_CLASS_MAGE:         return Bcore::Containers::SelectRandomContainerElement(std::array<uint8, 3>{ BOT_SPEC_MAGE_ARCANE, BOT_SPEC_MAGE_FIRE, BOT_SPEC_MAGE_FROST });
+                case BOT_CLASS_WARLOCK:      return Bcore::Containers::SelectRandomContainerElement(std::array<uint8, 3>{ BOT_SPEC_WARLOCK_AFFLICTION, BOT_SPEC_WARLOCK_DEMONOLOGY, BOT_SPEC_WARLOCK_DESTRUCTION });
+                case BOT_CLASS_DRUID:        return BOT_SPEC_DRUID_BALANCE;
+                default:                     return BOT_SPEC_DEFAULT;
+            }
+        };
+
+        auto isArenaDisallowedSpec = [](uint8 spec) -> bool
+        {
+            switch (spec)
+            {
+                case BOT_SPEC_WARRIOR_PROTECTION:
+                case BOT_SPEC_PALADIN_HOLY:
+                case BOT_SPEC_PALADIN_PROTECTION:
+                case BOT_SPEC_PRIEST_DISCIPLINE:
+                case BOT_SPEC_PRIEST_HOLY:
+                case BOT_SPEC_DK_BLOOD:
+                case BOT_SPEC_SHAMAN_RESTORATION:
+                case BOT_SPEC_DRUID_RESTORATION:
+                case BOT_SPEC_DRUID_FERAL:
+                    return true;
+                default:
+                    return false;
+            }
+        };
+
+        uint32 const targetBots = desiredBots > 0 ? desiredBots : uint8(arenaType - 1);
+        uint32 spawned = 0;
+
+        for (uint32 i = 0; i < targetBots && !_spareBotIdsPerClassMap.empty(); ++i)
+        {
+            uint32 desiredEntry = 0;
+            uint8 desiredClass = BOT_CLASS_NONE;
+            uint8 desiredSpec = BOT_SPEC_DEFAULT;
+            if (i < roster.size())
+            {
+                desiredEntry = roster[i].botEntry;
+                desiredClass = roster[i].botClass;
+                desiredSpec = roster[i].botSpec;
+            }
+
+            uint8 botClass = BOT_CLASS_NONE;
+            uint32 spareBotId = 0;
+
+            auto classItr = _spareBotIdsPerClassMap.find(desiredClass);
+            if (isArenaAllowedClass(desiredClass) && desiredEntry != 0 && classItr != _spareBotIdsPerClassMap.end() && classItr->second.contains(desiredEntry))
+            {
+                botClass = desiredClass;
+                spareBotId = desiredEntry;
+            }
+            else if (isArenaAllowedClass(desiredClass) && classItr != _spareBotIdsPerClassMap.end() && !classItr->second.empty())
+            {
+                botClass = desiredClass;
+                spareBotId = classItr->second.front();
+            }
+            else
+            {
+                auto anyItr = std::find_if(_spareBotIdsPerClassMap.begin(), _spareBotIdsPerClassMap.end(),
+                    [&isArenaAllowedClass](auto const& kv) { return isArenaAllowedClass(kv.first) && !kv.second.empty(); });
+                if (anyItr == _spareBotIdsPerClassMap.end())
+                    break;
+                botClass = anyItr->first;
+                spareBotId = anyItr->second.front();
+            }
+
+            uint8 arenaSpec = desiredSpec;
+            if (!BotDataMgr::IsValidSpecForClass(botClass, arenaSpec) || arenaSpec == BOT_SPEC_DEFAULT || isArenaDisallowedSpec(arenaSpec))
+                arenaSpec = selectArenaDpsSpecForClass(botClass);
+
+            if (i < roster.size() && (roster[i].botEntry != spareBotId || roster[i].botClass != botClass))
+            {
+                roster[i].botEntry = spareBotId;
+                roster[i].botClass = botClass;
+                rosterChanged = true;
+            }
+
+            // By leewheel 20260528 - arena policy: fixed roster + DPS-only + grouped bot.
+            uint32 arenaRoles = BOT_ROLE_DPS | BOT_ROLE_PARTY;
+            if (!BotDataMgr::IsMeleeSpec(arenaSpec))
+                arenaRoles |= BOT_ROLE_RANGED;
+
+            GenerateDungeonBotToSpawn({ spareBotId, botClass, arenaSpec, arenaRoles }, owner);
+            _arenaBotOwnerLockMap[spareBotId] = owner->GetGUID().GetCounter();
+            ++spawned;
+        }
+
+        CharacterDatabase.PExecute("UPDATE worldstates SET value = {} WHERE entry = {}", next_bot_id, uint32(BOT_GIVER_ENTRY));
+        return spawned;
     }
 
     static void CleanExtraBotData(Creature const* bot)
@@ -996,65 +1361,39 @@ void BotDataMgr::TryReplenishWanderingBots()
         s_wandererPeriodStats.RecordReplenishQueued(spawned);
 }
 
+bool BotDataMgr::IsWandererMapActive(uint32 mapId)
+{
+    // By leewheel 20260528 - centralized "map has players" probe for wanderer dormancy/activation.
+    Map* map = sMapMgr->CreateBaseMap(mapId);
+    return map && map->HavePlayers();
+}
+
 void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
 {
-    if (!BotCfg::IsWandererGridUnloadEnabled() || !BotCfg::GetDesiredWanderingBotsCount())
-        return;
-
-    static uint32 timer = 0;
-    static std::unordered_map<uint32, time_t> lastPlayerSeen;
-    timer += diff;
-    if (timer < 10 * IN_MILLISECONDS)
-        return;
-    timer = 0;
-
-    time_t const now = GameTime::GetGameTime();
-    uint32 const idleSec = BotCfg::GetWandererGridEmptyMapIdleSec();
-
-    for (uint32 mapId : BotCfg::GetWanderContinentMapIds())
-    {
-        Map* map = sMapMgr->CreateBaseMap(mapId);
-        if (!map || !map->GetEntry()->IsWorldMap())
-            continue;
-
-        if (map->HavePlayers())
-        {
-            lastPlayerSeen[mapId] = now;
-            continue;
-        }
-
-        auto itr = lastPlayerSeen.find(mapId);
-        if (itr == lastPlayerSeen.end())
-        {
-            lastPlayerSeen[mapId] = now;
-            continue;
-        }
-
-        if (uint32(now - itr->second) < idleSec)
-            continue;
-
-        std::vector<uint32> toDespawn;
-        toDespawn.reserve(64);
-        for (Creature const* bot : _existingBots)
-        {
-            if (bot && bot->IsInWorld() && bot->IsWandererBot() && bot->GetMapId() == mapId)
-                toDespawn.push_back(bot->GetEntry());
-        }
-
-        if (toDespawn.empty())
-            continue;
-
-        s_wandererPeriodStats.RecordGridRecycle(mapId, uint32(toDespawn.size()));
-
-        for (uint32 entry : toDespawn)
-            DespawnWandererBot(entry);
-    }
+    // By leewheel 20260528 - keep wanderers persistent across world maps (do not despawn on empty maps).
+    // Dormant/active behavior is handled in bot_ai::Evade() using IsWandererMapActive().
+    // Keep wanderers globally present. Empty maps are now "dormant" in bot_ai:
+    // bots stop roaming and idle/sit until a player appears on that map.
+    (void)diff;
 }
 
 void BotDataMgr::Update(uint32 diff)
 {
+    // By leewheel 20260528 - avoid per-tick LLM reconfigure, only refresh when settings changed.
+    static bool llmEnableCache = false;
+    static std::string llmPathCache;
+    bool const llmEnableNow = BotCfg::IsBotChatLLMEnabled();
+    std::string llmPathNow = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
+    if (llmEnableNow != llmEnableCache || llmPathNow != llmPathCache)
+    {
+        NpcBotChatLLM::Engine::Instance().Configure(llmEnableNow, llmPathNow);
+        llmEnableCache = llmEnableNow;
+        llmPathCache = llmPathNow;
+    }
+
     UpdateWandererLogSampler(diff);
     UpdateWandererGridRecycle(diff);
+    TryBotChannelChat(diff); // By leewheel 20260528 - world/party/raid chat ticker.
 
     botSpawnEvents.Update(diff);
     for (auto& [_, events] : botBGJoinEvents)
@@ -3500,6 +3839,11 @@ uint8 BotDataMgr::GetNpcBotHireSource(uint32 entry)
     return data ? data->hire_source : NPCBOT_HIRE_NORMAL;
 }
 
+bool BotDataMgr::IsArenaBotLockedForOwner(uint32 botEntry, uint32 ownerGuidLow)
+{
+    return IsArenaBotLockedForOwnerImpl(botEntry, ownerGuidLow);
+}
+
 void BotDataMgr::SetNpcBotHireSource(uint32 entry, uint8 hireSource)
 {
     UpdateNpcBotData(entry, NPCBOT_UPDATE_HIRE_SOURCE, &hireSource);
@@ -3533,6 +3877,9 @@ Creature* BotDataMgr::FindFreeHireBotForQuickGroup(Player const* player, uint8 b
         }
 
         if (GetMinLevelForBotClass(botClass) > player->GetLevel())
+            continue;
+
+        if (IsArenaBotLockedForOwner(entry, player->GetGUID().GetCounter()))
             continue;
 
         Creature const* bot = FindBot(entry);
@@ -4865,6 +5212,109 @@ void BotDataMgr::SaveNpcBotMgrData(ObjectGuid playerGuid, CharacterDatabaseTrans
     trans->PAppend("INSERT INTO characters_npcbot_settings (owner,dist_follow,dist_attack,attack_range_mode,attack_angle_mode,engage_delay_dps,engage_delay_heal,flags) VALUES ({},{},{},{},{},{},{},{})",
         bmdi->first.GetCounter(), md.dist_follow, md.dist_attack, md.attack_range_mode, md.attack_angle_mode, md.engage_delay_dps, md.engage_delay_heal,
         (md.flags & NPCBOT_MGR_FLAG_MASK_ALL_DB_ALLOWED));
+}
+
+bool BotDataMgr::EnsureArenaBotProfile(ObjectGuid playerGuid, uint8 bracketType, std::string_view teamName)
+{
+    // By leewheel 20260528 - create arena bot profile row lazily for selected bracket (2v2/3v3/5v5).
+    if (!playerGuid.IsPlayer() || (bracketType != 2 && bracketType != 3 && bracketType != 5))
+        return false;
+
+    ObjectGuid::LowType owner = playerGuid.GetCounter();
+    QueryResult exists = CharacterDatabase.PQuery("SELECT owner_guid FROM characters_npcbot_arena_profile WHERE owner_guid={} AND bracket_type={} LIMIT 1",
+        owner, uint32(bracketType));
+    if (exists)
+        return true;
+
+    std::string safeName(teamName.empty() ? "Arena Team" : std::string(teamName));
+    CharacterDatabase.EscapeString(safeName);
+    CharacterDatabase.PExecute("INSERT INTO characters_npcbot_arena_profile (owner_guid, bracket_type, team_name) VALUES ({}, {}, '{}')",
+        owner, uint32(bracketType), safeName);
+    return true;
+}
+
+void BotDataMgr::SetArenaBotTeamName(ObjectGuid playerGuid, uint8 bracketType, std::string_view teamName)
+{
+    // By leewheel 20260528 - keep bot-arena profile name aligned with chosen/rated team naming.
+    if (!playerGuid.IsPlayer() || (bracketType != 2 && bracketType != 3 && bracketType != 5))
+        return;
+
+    std::string safeName(teamName.empty() ? "Arena Team" : std::string(teamName));
+    CharacterDatabase.EscapeString(safeName);
+    CharacterDatabase.PExecute("UPDATE characters_npcbot_arena_profile SET team_name='{}' WHERE owner_guid={} AND bracket_type={}",
+        safeName, playerGuid.GetCounter(), uint32(bracketType));
+}
+
+std::string BotDataMgr::GetArenaBotTeamName(ObjectGuid playerGuid, uint8 bracketType)
+{
+    if (!playerGuid.IsPlayer() || (bracketType != 2 && bracketType != 3 && bracketType != 5))
+        return {};
+
+    QueryResult res = CharacterDatabase.PQuery("SELECT team_name FROM characters_npcbot_arena_profile WHERE owner_guid={} AND bracket_type={} LIMIT 1",
+        playerGuid.GetCounter(), uint32(bracketType));
+    if (!res)
+        return {};
+
+    return res->Fetch()[0].GetString();
+}
+
+std::vector<ArenaBotRosterSlot> BotDataMgr::GetArenaBotRoster(ObjectGuid playerGuid, uint8 bracketType)
+{
+    std::vector<ArenaBotRosterSlot> roster;
+    if (!playerGuid.IsPlayer() || (bracketType != 2 && bracketType != 3 && bracketType != 5))
+        return roster;
+
+    QueryResult res = CharacterDatabase.PQuery(
+        "SELECT slot_index, bot_entry, bot_class, bot_spec FROM characters_npcbot_arena_roster WHERE owner_guid={} AND bracket_type={} ORDER BY slot_index",
+        playerGuid.GetCounter(), uint32(bracketType));
+
+    if (!res)
+        return roster;
+
+    do
+    {
+        Field* f = res->Fetch();
+        ArenaBotRosterSlot slot;
+        slot.slot = f[0].GetUInt8();
+        slot.botEntry = f[1].GetUInt32();
+        slot.botClass = f[2].GetUInt8();
+        slot.botSpec = f[3].GetUInt8();
+        roster.push_back(slot);
+    } while (res->NextRow());
+
+    return roster;
+}
+
+void BotDataMgr::SaveArenaBotRoster(ObjectGuid playerGuid, uint8 bracketType, std::vector<ArenaBotRosterSlot> const& roster)
+{
+    if (!playerGuid.IsPlayer() || (bracketType != 2 && bracketType != 3 && bracketType != 5))
+        return;
+
+    ObjectGuid::LowType owner = playerGuid.GetCounter();
+    CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+    trans->PAppend("DELETE FROM characters_npcbot_arena_roster WHERE owner_guid={} AND bracket_type={}", owner, uint32(bracketType));
+    for (ArenaBotRosterSlot const& slot : roster)
+    {
+        trans->PAppend("INSERT INTO characters_npcbot_arena_roster (owner_guid, bracket_type, slot_index, bot_entry, bot_class, bot_spec) VALUES ({}, {}, {}, {}, {}, {})",
+            owner, uint32(bracketType), uint32(slot.slot), uint32(slot.botEntry), uint32(slot.botClass), uint32(slot.botSpec));
+    }
+    CharacterDatabase.CommitTransaction(trans);
+}
+
+uint32 BotDataMgr::GenerateArenaRosterBots(Player const* leader, uint8 arenaType, uint8 desiredBotCount)
+{
+    // By leewheel 20260528 - spawn fixed roster arena companions for player queue.
+    if (!leader || !leader->GetSession() || arenaType < 2 || arenaType > 5)
+        return 0;
+    if (!BotCfg::IsNpcBotModEnabled())
+        return 0;
+
+    std::vector<ArenaBotRosterSlot> roster = GetArenaBotRoster(leader->GetGUID(), arenaType);
+    bool rosterChanged = false;
+    uint32 const spawned = sBotGen->GenerateArenaBotsToSpawn(leader, arenaType, desiredBotCount, roster, rosterChanged);
+    if (rosterChanged)
+        SaveArenaBotRoster(leader->GetGUID(), arenaType, roster);
+    return spawned;
 }
 
 class TC_GAME_API WanderingBotXpGainFormulaScript : public FormulaScript

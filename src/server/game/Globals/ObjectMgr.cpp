@@ -8775,7 +8775,8 @@ void ObjectMgr::LoadGameObjectForQuests()
             }
             case GAMEOBJECT_TYPE_GOOBER:
             {
-                if (gameObjectTemplatePair.second.goober.questId > 0)              //quests objects
+                // questId -1 (e.g. Samophlange valves 4072/61935/61936) must refresh on quest accept; see TrinityCore #24952
+                if (gameObjectTemplatePair.second.goober.questId != 0)
                     break;
                 continue;
             }

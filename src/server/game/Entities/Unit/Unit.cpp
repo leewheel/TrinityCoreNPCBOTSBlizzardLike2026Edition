@@ -12728,6 +12728,9 @@ bool Unit::CanApplyResilience() const
     Unit const* target = nullptr;
     if (victim->GetTypeId() == TYPEID_PLAYER)
         target = victim;
+    // By leewheel 20260528 - NPCBots are creatures, but arena resilience must apply to them directly as victims.
+    else if (victim->GetTypeId() == TYPEID_UNIT && victim->ToCreature()->IsNPCBotOrPet())
+        target = victim;
     else // victim->GetTypeId() == TYPEID_UNIT
     {
         if (Unit* owner = victim->GetOwner())
