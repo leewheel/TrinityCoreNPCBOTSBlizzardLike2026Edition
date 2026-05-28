@@ -271,7 +271,8 @@ static void TryBotChannelChat(uint32 diff)
         return;
     _botChatTickerMs = 0;
 
-    uint32 const nowMs = uint32(GameTime::GetGameTimeMS().count());
+    // By leewheel 20260528 - GameTime::GetGameTimeMS already returns uint32 in this branch.
+    uint32 const nowMs = GameTime::GetGameTimeMS();
     while (!_botChatGlobalSayMs.empty() && (nowMs - _botChatGlobalSayMs.front()) > 60000)
         _botChatGlobalSayMs.pop_front();
     if (_botChatGlobalSayMs.size() >= BotCfg::GetBotChatGlobalMaxPerMinute())
@@ -1206,7 +1207,7 @@ public:
             else if (isArenaAllowedClass(desiredClass) && classItr != _spareBotIdsPerClassMap.end() && !classItr->second.empty())
             {
                 botClass = desiredClass;
-                spareBotId = classItr->second.front();
+                spareBotId = *classItr->second.begin();
             }
             else
             {
@@ -1215,7 +1216,7 @@ public:
                 if (anyItr == _spareBotIdsPerClassMap.end())
                     break;
                 botClass = anyItr->first;
-                spareBotId = anyItr->second.front();
+                spareBotId = *anyItr->second.begin();
             }
 
             uint8 arenaSpec = desiredSpec;
