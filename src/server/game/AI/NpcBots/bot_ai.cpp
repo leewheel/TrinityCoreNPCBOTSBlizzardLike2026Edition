@@ -16141,6 +16141,44 @@ void bot_ai::JustEnteredCombat(Unit* u)
 //killer may be NULL
 void bot_ai::JustDied(Unit* u)
 {
+    if (u && u->GetGUID() != me->GetGUID())
+    {
+        // By leewheel 20260528 - feed structured scene event for LLM, not final fixed dialogue.
+        std::string deathEvent;
+        if (me->GetMap()->IsBattleground())
+        {
+            Battleground const* bg = GetBG();
+            uint32 bgType = uint32(bg ? bg->GetTypeID() : 0);
+            std::string objective = "抱团推进";
+            switch (bgType)
+            {
+                case BATTLEGROUND_WS: objective = "夺旗与护旗"; break;
+                case BATTLEGROUND_AB: objective = "占点与守点"; break;
+                case BATTLEGROUND_EY: objective = "抢旗与控塔"; break;
+                case BATTLEGROUND_AV: objective = "推塔与将军线"; break;
+                default: break;
+            }
+            deathEvent = Bcore::StringFormat(
+                "event=BG_DEFEAT; killer={}; killer_type={}; attackers={}; map={}; bg={}; objective={}",
+                u->GetName(),
+                (u->IsPlayer() ? "player" : u->IsNPCBotOrPet() ? "bot" : "creature"),
+                uint32(me->getAttackers().size()),
+                me->GetMapId(),
+                bgType,
+                objective);
+        }
+        else
+            deathEvent = Bcore::StringFormat(
+                "event=PVP_DEFEAT; killer={}; killer_type={}; attackers={}; map={}",
+                u->GetName(),
+                (u->IsPlayer() ? "player" : u->IsNPCBotOrPet() ? "bot" : "creature"),
+                uint32(me->getAttackers().size()),
+                me->GetMapId());
+        BotDataMgr::PushBotChatSceneEvent(me, deathEvent);
+        if (u->IsControlledByPlayer() || u->IsPvP() || u->IsNPCBotOrPet())
+            BotDataMgr::PushBotChatPvpDefeatEvent(me, u->GetName());
+    }
+
     AbortTeleport();
     AbortAwaitStateRemoval();
     KillEvents(false);
@@ -16235,6 +16273,49 @@ void bot_ai::KilledUnit(Unit* u)
         return;
 
     ++_killsCount;
+    if (u->GetGUID() != me->GetGUID())
+    {
+        // By leewheel 20260528 - feed structured scene event for LLM, not final fixed dialogue.
+        std::string killEvent;
+        if (me->GetMap()->IsBattleground())
+        {
+            Battleground const* bg = GetBG();
+            uint32 bgType = uint32(bg ? bg->GetTypeID() : 0);
+            std::string objective = "抱团推进";
+            switch (bgType)
+            {
+                case BATTLEGROUND_WS: objective = "夺旗与护旗"; break;
+                case BATTLEGROUND_AB: objective = "占点与守点"; break;
+                case BATTLEGROUND_EY: objective = "抢旗与控塔"; break;
+                case BATTLEGROUND_AV: objective = "推塔与将军线"; break;
+                default: break;
+            }
+            killEvent = Bcore::StringFormat(
+                "event=BG_KILL; target={}; target_type={}; map={}; bg={}; objective={}",
+                u->GetName(),
+                (u->IsPlayer() ? "player" : u->IsNPCBotOrPet() ? "bot" : "creature"),
+                me->GetMapId(),
+                bgType,
+                objective);
+        }
+        else
+            killEvent = Bcore::StringFormat(
+                "event=KILL; target={}; target_type={}; map={}",
+                u->GetName(),
+                (u->IsPlayer() ? "player" : u->IsNPCBotOrPet() ? "bot" : "creature"),
+                me->GetMapId());
+        if (Creature const* vc = u->ToCreature())
+        {
+            if (vc->IsDungeonBoss() || vc->isWorldBoss())
+                killEvent = Bcore::StringFormat("event=BOSS_KILL; boss={}; quality_hint=loot_focus; map={}", u->GetName(), me->GetMapId());
+            else if (vc->GetCreatureTemplate()->rank > CREATURE_ELITE_NORMAL)
+                killEvent = Bcore::StringFormat("event=ELITE_KILL; target={}; map={}", u->GetName(), me->GetMapId());
+        }
+        BotDataMgr::PushBotChatSceneEvent(me, killEvent);
+        if (u->IsControlledByPlayer() || u->IsPvP() || u->IsNPCBotOrPet())
+            BotDataMgr::PushBotChatPvpKillEvent(me, u->GetName());
+    }
+
     if (u->IsControlledByPlayer() || u->IsPvP() || u->IsNPCBotOrPet())
     {
         ++_pvpKillsCount;
