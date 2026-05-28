@@ -283,17 +283,42 @@ namespace
         }
     }
 
+    // By leewheel 20260528 - BMU list name must match in-world bot (appearance / live creature).
+    std::string ResolveBotNameForBmu(uint32 entry, CreatureTemplate const* proto)
+    {
+        if (Creature const* bot = BotDataMgr::FindBot(entry))
+        {
+            if (bot->IsInWorld())
+            {
+                std::string const liveName = bot->GetName();
+                if (!liveName.empty())
+                    return liveName;
+            }
+        }
+
+        if (std::string_view customName = BotDataMgr::GetNpcBotAppearanceName(entry); !customName.empty())
+            return std::string(customName);
+
+        return proto ? proto->Name : "Bot";
+    }
+
+    uint32 ResolveBotDisplayIdForBmu(uint32 entry, CreatureTemplate const* proto)
+    {
+        if (Creature const* bot = BotDataMgr::FindBot(entry))
+            if (bot->IsInWorld())
+                return bot->GetDisplayId();
+
+        return proto ? proto->GetFirstValidModelId() : 0;
+    }
+
     void SendBotMeta(Player* player, uint32 entry, NpcBotData const* data)
     {
         CreatureTemplate const* proto = sObjectMgr->GetCreatureTemplate(entry);
         if (!proto)
             return;
 
-        std::string botName = proto->Name;
-        if (std::string_view customName = BotDataMgr::GetNpcBotAppearanceName(entry); !customName.empty())
-            botName = std::string(customName);
-
-        uint32 displayId = proto->GetFirstValidModelId();
+        std::string const botName = ResolveBotNameForBmu(entry, proto);
+        uint32 const displayId = ResolveBotDisplayIdForBmu(entry, proto);
         uint32 race = 0;
         uint8 gender = 0;
         std::string className = "Bot";
@@ -601,6 +626,19 @@ void BotManagerAddon::SendBotSnapshot(Player* player, uint32 botEntry)
         return;
 
     HandleQuery(player, botEntry);
+}
+
+// By leewheel 20260528 - gossip「让我看看你的装备」: sync data + tell client addon to open inspect window
+void BotManagerAddon::SendBotSnapshotAndOpenUI(Player* player, uint32 botEntry)
+{
+    if (!player || !botEntry)
+        return;
+
+    HandleQuery(player, botEntry);
+
+    std::ostringstream openUi;
+    openUi << "U;OPEN;" << botEntry;
+    SendBMU(player, openUi.str());
 }
 
 bool BotManagerAddon::TryHandleIncoming(Player* player, std::string_view message)

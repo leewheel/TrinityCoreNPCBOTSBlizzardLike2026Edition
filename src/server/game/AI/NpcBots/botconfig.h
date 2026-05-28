@@ -42,6 +42,8 @@ public:
     static bool IsNpcBotLogEnabled();
     static bool IsNpcBotDungeonFinderEnabled();
     static bool IsNpcBotDungeonFinderBotGenerationEnabled();
+    // By leewheel 20260528 - NpcBot.AutoLFG.Enable (LFG queue bot role fill / faster match)
+    static bool IsNpcBotLfgQueueFillEnabled();
     static bool LimitNpcBotsInDungeons();
     static bool LimitNpcBotsInRaids();
     static bool IsNpcBotsPremadeEnabled();
@@ -59,6 +61,13 @@ public:
     static bool IsWanderingClassEnabled(uint8 m_class);
     static bool EnableWanderingUntargetNpcQuestgiver();
     static bool EnableWanderingUntargetNpcFlightmaster();
+    // By leewheel 20260528 - wanderer PvE etiquette (less quest-mob stealing / player-proximity spawns)
+    static bool EnableWanderingSkipPlayerTagged();
+    static bool EnableWanderingSkipNearPlayerTarget();
+    static bool EnableWanderingReplenishPreferEmptyMaps();
+    static uint32 GetWandererMapWakeGraceSec();
+    static float GetWandererMinSpawnDistToPlayer();
+    static float GetWandererPlayerQuestMobGuardDist();
     static bool HideBotSpawns();
     static bool IsEnrageOnDimissEnabled();
     static bool IsBotStatsLimitsEnabled();

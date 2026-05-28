@@ -115,10 +115,13 @@ void LFGPlayerScript::OnMapChanged(Player* player)
         //end npcbot
 
         //npcbot
-        if (group->GetLeaderGUID() == player->GetGUID() && group->GetMembersCount() < MAX_GROUP_SIZE &&
-            BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
+        // By leewheel 20260528 - any member entering LFG dungeon may trigger fill (not only group leader)
+        if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
         {
-            BotDataMgr::GenerateDungeonBots(player, group, map);
+            Player* spawnLeader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
+            if (!spawnLeader)
+                spawnLeader = player;
+            BotDataMgr::GenerateDungeonBots(spawnLeader, group, map);
             // By leewheel 20260523 - ensure LFG fill-in bots have best gear after spawn (no command needed)
             for (GroupBotReference* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
             {
@@ -151,9 +154,10 @@ void LFGPlayerScript::OnMapChanged(Player* player)
         }
 
         //npcbot
+        // By leewheel 20260528 - leave dungeon: remove LFG service bots only, keep hired companions
         if (group && group->isLFGGroup())
             if (sLFGMgr->GetState(group->GetGUID()) >= LFG_STATE_FINISHED_DUNGEON)
-                player->GetBotMgr()->RemoveAllSummonedBots();
+                player->GetBotMgr()->RemoveLfgServiceBots();
         //end npcbot
 
         player->RemoveAurasDueToSpell(LFG_SPELL_LUCK_OF_THE_DRAW);

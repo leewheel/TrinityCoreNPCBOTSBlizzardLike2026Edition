@@ -3645,10 +3645,47 @@ bool bot_ai::CanBotAttack(Unit const* target, int8 byspell, bool secondary) cons
 
     if (IsWanderer() && target->IsCreature() && target->GetVictim() != me)
     {
+        // By leewheel 20260528 - map wake grace: do not start new fights right after a player enters the zone.
+        if (!me->IsInCombat() && BotDataMgr::IsWandererMapInWakeGracePeriod(me->GetMapId()))
+            return false;
+
         if (BotCfg::EnableWanderingUntargetNpcQuestgiver() && target->IsQuestGiver())
             return false;
         if (BotCfg::EnableWanderingUntargetNpcFlightmaster() && target->IsTaxi())
             return false;
+
+        if (Creature const* creature = target->ToCreature())
+        {
+            if (BotCfg::EnableWanderingSkipPlayerTagged() && creature->hasLootRecipient())
+                return false;
+
+            if (Unit const* victim = creature->GetVictim())
+                if (victim->IsControlledByPlayer())
+                    return false;
+
+            if (BotCfg::EnableWanderingSkipNearPlayerTarget())
+            {
+                float const guardDist = BotCfg::GetWandererPlayerQuestMobGuardDist();
+                Map* map = me->GetMap();
+                if (map)
+                {
+                    for (MapReference const& ref : map->GetPlayers())
+                    {
+                        Player* player = ref.GetSource();
+                        if (!player || !player->IsInWorld() || player->IsGameMaster())
+                            continue;
+                        if (player->GetExactDist2d(creature) > guardDist)
+                            continue;
+
+                        if (player->GetSelectedUnit() == creature)
+                            return false;
+
+                        if (player->GetVictim() == creature)
+                            return false;
+                    }
+                }
+            }
+        }
         //do not attack friendly targets in FFAPvP mode
         if (me->IsFFAPvP() && me->GetFaction() == FACTION_TEMPLATE_NEUTRAL_HOSTILE)
         {
@@ -8912,9 +8949,9 @@ bool bot_ai::OnGossipSelect(Player* player, Creature* creature/* == me*/, uint32
         }
         case GOSSIP_SENDER_EQUIPMENT_LIST: //list inventory
         {
-            // By leewheel 20260520 - push BMU data; open UI with /bm or right-click menu
-            BotManagerAddon::SendBotSnapshot(player, me->GetEntry());
-            BotWhisper("[机器人管理] 装备已同步。请使用 /bm 或右键机器人「让我看看你的装备」打开界面。", player);
+            // By leewheel 20260528 - push BMU data and open NPCBotInventory inspect UI (needs addon >= 1.2)
+            BotManagerAddon::SendBotSnapshotAndOpenUI(player, me->GetEntry());
+            BotWhisper("[机器人管理] 装备已同步，管理界面已打开。", player);
             break;
         }
         case GOSSIP_SENDER_EQUIP_TRANSMOGRIFY_MHAND:     //0 - 1 main hand
@@ -18927,7 +18964,8 @@ void bot_ai::Evade()
     // By leewheel 20260528 - world-map wanderers enter dormant mode when no players are on their map.
     // World-map wanderers enter dormant mode when no players are on their map:
     // no roaming, keep idle/sit; they will wake automatically once a player appears.
-    if (IsWanderer() && me->GetMap()->GetEntry()->IsWorldMap() && !BotDataMgr::IsWandererMapActive(me->GetMapId()) &&
+    if (IsWanderer() && me->GetMap()->GetEntry()->IsWorldMap() &&
+        (!BotDataMgr::IsWandererMapActive(me->GetMapId()) || BotDataMgr::IsWandererMapInWakeGracePeriod(me->GetMapId())) &&
         !me->IsInCombat() && me->getAttackers().empty())
     {
         if (me->isMoving())

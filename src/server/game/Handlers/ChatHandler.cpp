@@ -38,6 +38,7 @@
 #include "Player.h"
 #include "ScriptMgr.h"
 #include "SpellAuraEffects.h"
+#include "botdatamgr.h"
 #include "Util.h"
 #include "Warden.h"
 #include "World.h"
@@ -487,6 +488,7 @@ void WorldSession::HandleChatMessage(ChatMsg type, Language lang, std::string ms
             {
                 sScriptMgr->OnPlayerChat(sender, type, lang, msg, chn);
                 chn->Say(sender->GetGUID(), msg, lang);
+                BotDataMgr::OnPlayerChannelChat(sender, target, msg);
             }
             break;
         }

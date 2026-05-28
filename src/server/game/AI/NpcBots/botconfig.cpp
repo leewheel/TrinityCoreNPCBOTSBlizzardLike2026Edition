@@ -91,6 +91,7 @@ static bool _enableNpcBotsBGs;
 static bool _enableNpcBotsArenas;
 static bool _enableDungeonFinder;
 static bool _enableDungeonFinderBotsGen;
+static bool _enableLfgQueueFill; // By leewheel 20260528 - NpcBot.AutoLFG.Enable (LFG queue role fill)
 static bool _enableNpcBotsPremade;
 static bool _limitNpcBotsDungeons;
 static bool _limitNpcBotsRaids;
@@ -156,6 +157,12 @@ static bool _bothk_message_enable;
 static bool _bothk_achievements_enable;
 static bool _untarget_wnpc_questgiver;
 static bool _untarget_wnpc_flightmaster;
+static bool _wander_skip_player_tagged;
+static bool _wander_skip_near_player_target;
+static bool _wander_replenish_prefer_empty_maps;
+static uint32 _wander_map_wake_grace_sec;
+static float _wander_min_spawn_dist_player;
+static float _wander_player_quest_guard_dist;
 static float _botStatLimits_dodge;
 static float _botStatLimits_parry;
 static float _botStatLimits_block;
@@ -387,7 +394,10 @@ private:
         _enableNpcBotsBGs               = sConfigMgr->GetBoolDefault("NpcBot.Enable.BG", false);
         _enableNpcBotsArenas            = sConfigMgr->GetBoolDefault("NpcBot.Enable.Arena", false);
         _enableDungeonFinder            = sConfigMgr->GetBoolDefault("NpcBot.Enable.DungeonFinder", true);
-        _enableDungeonFinderBotsGen     = sConfigMgr->GetBoolDefault("NpcBot.DungeonBots.Enable", false);
+        // By leewheel 20260528 - LFG dungeon bot generation (queue fake roles + in-dungeon spawn)
+        _enableDungeonFinderBotsGen     = sConfigMgr->GetBoolDefault("NpcBot.DungeonBots.Enable", true);
+        // By leewheel 20260528 - allow incomplete LFG groups to match via bot-filled queue roles
+        _enableLfgQueueFill             = sConfigMgr->GetBoolDefault("NpcBot.AutoLFG.Enable", true);
         _enableNpcBotsPremade           = sConfigMgr->GetBoolDefault("NpcBot.Premade.Enable", false);
         _limitNpcBotsDungeons           = sConfigMgr->GetBoolDefault("NpcBot.Limit.Dungeon", true);
         _limitNpcBotsRaids              = sConfigMgr->GetBoolDefault("NpcBot.Limit.Raid", true);
@@ -456,17 +466,25 @@ private:
         _enableclass_wander_mage        = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Mage.Enable", true);
         _enableclass_wander_warlock     = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Warlock.Enable", true);
         _enableclass_wander_druid       = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Druid.Enable", true);
+        // By leewheel 20260528 - hero/extra wanderer classes off by default (balance)
         _enableclass_wander_blademaster = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Blademaster.Enable", false);
-        _enableclass_wander_sphynx      = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.ObsidianDestroyer.Enable", true);
-        _enableclass_wander_archmage    = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Archmage.Enable", true);
-        _enableclass_wander_dreadlord   = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Dreadlord.Enable", true);
-        _enableclass_wander_spellbreaker= sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.SpellBreaker.Enable", true);
-        _enableclass_wander_darkranger  = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.DarkRanger.Enable", true);
-        _enableclass_wander_necromancer = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Necromancer.Enable", true);
-        _enableclass_wander_seawitch    = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.SeaWitch.Enable", true);
-        _enableclass_wander_cryptlord   = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.CryptLord.Enable", true);
-        _untarget_wnpc_questgiver       = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.Questgiver", false);
-        _untarget_wnpc_flightmaster     = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.Flightmaster", false);
+        _enableclass_wander_sphynx      = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.ObsidianDestroyer.Enable", false);
+        _enableclass_wander_archmage    = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Archmage.Enable", false);
+        _enableclass_wander_dreadlord   = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Dreadlord.Enable", false);
+        _enableclass_wander_spellbreaker= sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.SpellBreaker.Enable", false);
+        _enableclass_wander_darkranger  = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.DarkRanger.Enable", false);
+        _enableclass_wander_necromancer = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.Necromancer.Enable", false);
+        _enableclass_wander_seawitch    = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.SeaWitch.Enable", false);
+        _enableclass_wander_cryptlord   = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Classes.CryptLord.Enable", false);
+        // By leewheel 20260528 - wanderer etiquette defaults tuned for immersion (PB-like world presence)
+        _untarget_wnpc_questgiver       = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.Questgiver", true);
+        _untarget_wnpc_flightmaster     = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.Flightmaster", true);
+        _wander_skip_player_tagged      = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.PlayerTagged", true);
+        _wander_skip_near_player_target = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.SkipTarget.NearPlayerTarget", true);
+        _wander_replenish_prefer_empty_maps = sConfigMgr->GetBoolDefault("NpcBot.WanderingBots.Replenish.PreferEmptyMaps", true);
+        _wander_map_wake_grace_sec      = uint32(std::max<int32>(sConfigMgr->GetIntDefault("NpcBot.WanderingBots.MapWakeGraceSec", 60), 0));
+        _wander_min_spawn_dist_player   = sConfigMgr->GetFloatDefault("NpcBot.WanderingBots.Spawn.MinDistToPlayer", 180.0f);
+        _wander_player_quest_guard_dist = sConfigMgr->GetFloatDefault("NpcBot.WanderingBots.SkipTarget.NearPlayerDist", 55.0f);
         _enrageOnDismiss                = sConfigMgr->GetBoolDefault("NpcBot.EnrageOnDismiss", true);
         _botStatLimits                  = sConfigMgr->GetBoolDefault("NpcBot.Stats.Limits.Enable", false);
         _botStatLimits_dodge            = sConfigMgr->GetFloatDefault("NpcBot.Stats.Limits.Dodge", 95.0f);
@@ -795,6 +813,12 @@ bool BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled()
     return _enableDungeonFinderBotsGen;
 }
 
+// By leewheel 20260528 - NpcBot.AutoLFG.Enable: LFG queue/proposal matching with bot role fillers
+bool BotCfg::IsNpcBotLfgQueueFillEnabled()
+{
+    return _enableLfgQueueFill;
+}
+
 bool BotCfg::LimitNpcBotsInDungeons()
 {
     return _limitNpcBotsDungeons;
@@ -1005,6 +1029,36 @@ bool BotCfg::EnableWanderingUntargetNpcQuestgiver()
 bool BotCfg::EnableWanderingUntargetNpcFlightmaster()
 {
     return _untarget_wnpc_flightmaster;
+}
+
+bool BotCfg::EnableWanderingSkipPlayerTagged()
+{
+    return _wander_skip_player_tagged;
+}
+
+bool BotCfg::EnableWanderingSkipNearPlayerTarget()
+{
+    return _wander_skip_near_player_target;
+}
+
+bool BotCfg::EnableWanderingReplenishPreferEmptyMaps()
+{
+    return _wander_replenish_prefer_empty_maps;
+}
+
+uint32 BotCfg::GetWandererMapWakeGraceSec()
+{
+    return _wander_map_wake_grace_sec;
+}
+
+float BotCfg::GetWandererMinSpawnDistToPlayer()
+{
+    return std::max(_wander_min_spawn_dist_player, 30.0f);
+}
+
+float BotCfg::GetWandererPlayerQuestMobGuardDist()
+{
+    return std::max(_wander_player_quest_guard_dist, 10.0f);
 }
 
 bool BotCfg::HideBotSpawns()

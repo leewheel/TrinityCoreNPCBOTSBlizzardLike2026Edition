@@ -196,6 +196,8 @@ public:
     void CleanupsBeforeBotDelete(ObjectGuid guid, uint8 removetype = BOT_REMOVE_LOGOUT);
     static void CleanupsBeforeBotDelete(Creature* bot);
     void RemoveAllSummonedBots();
+    // By leewheel 20260528 - dismiss only LFG service summons (NPCBOT_HIRE_LFG), keep hired party bots
+    void RemoveLfgServiceBots();
     void RemoveAllBots(uint8 removetype = BOT_REMOVE_LOGOUT);
     void RemoveBot(ObjectGuid guid, uint8 removetype = BOT_REMOVE_LOGOUT);
     void UnbindBot(ObjectGuid guid);

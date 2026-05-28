@@ -1216,25 +1216,27 @@ void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
     if (itProposalPlayer == proposal.players.end())
         return;
 
-    //npcbot - player accepted proposal
-    //make its bots accept too
+    //npcbot
+    // By leewheel 20260528 - on accept: auto-agree BOT_GIVER queue fillers (even without hired bots)
+    // and mirror accept for player's bots already in the proposal
     if (accept && guid.IsPlayer())
     {
         if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
         {
-            if (player->HaveBot())
+            for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
             {
-                for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
-                {
-                    ObjectGuid bguid = itPlayers->first;
-                    if (bguid.IsPlayer())
-                        continue;
-                    const bool is_dungeon_bot_lfg_guid = bguid.GetEntry() == BOT_GIVER_ENTRY;
-                    if (!is_dungeon_bot_lfg_guid && !player->GetBotMgr()->GetBot(bguid))
-                        continue;
+                ObjectGuid bguid = itPlayers->first;
+                if (bguid.IsPlayer())
+                    continue;
 
-                    itPlayers->second.accept = is_dungeon_bot_lfg_guid ? LFG_ANSWER_AGREE : LfgAnswer(accept);
+                if (bguid.GetEntry() == BOT_GIVER_ENTRY)
+                {
+                    itPlayers->second.accept = LFG_ANSWER_AGREE;
+                    continue;
                 }
+
+                if (player->HaveBot() && player->GetBotMgr()->GetBot(bguid))
+                    itPlayers->second.accept = LfgAnswer(accept);
             }
         }
     }

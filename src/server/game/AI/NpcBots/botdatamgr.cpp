@@ -38,6 +38,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <deque>
 #include <unordered_map>
@@ -149,7 +150,59 @@ static std::unordered_map<uint32, std::string> _botChatRecentPvpKiller;
 static std::unordered_map<uint32, std::string> _botChatRecentPvpVictim;
 static std::unordered_map<uint32, uint8> _botChatPvpWinStreak;
 static std::unordered_map<uint32, uint8> _botChatPvpLoseStreak;
+static std::unordered_set<uint32> _botChatUrgentReplyEntries;
+static std::unordered_set<uint32> _botChatDirectMentionEntries;
+static std::unordered_map<uint32, size_t> _botChatDirectMentionFirstPosByEntry;
+static std::unordered_map<uint32, std::string> _botChatUrgentChannelByEntry;
+static std::unordered_map<uint32, uint32> _botChatUrgentMapByEntry;
 static uint32 _botChatTickerMs = 0;
+
+struct MentionedBot
+{
+    Creature const* bot = nullptr;
+    size_t firstPos = std::string::npos;
+};
+
+static std::vector<MentionedBot> FindMentionedBotsByMessage(std::string_view message)
+{
+    std::vector<MentionedBot> mentioned;
+    mentioned.reserve(4);
+
+    std::wstring wmsg;
+    if (!Utf8toWStr(message, wmsg))
+        return mentioned;
+    wstrToLower(wmsg);
+
+    for (Creature const* bot : _existingBots)
+    {
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive())
+            continue;
+
+        std::wstring wname;
+        if (!Utf8toWStr(bot->GetName(), wname))
+            continue;
+        wstrToLower(wname);
+        if (wname.size() < 2)
+            continue;
+
+        size_t const mentionPos = wmsg.find(wname);
+        if (mentionPos == std::wstring::npos)
+            continue;
+
+        mentioned.push_back({ bot, mentionPos });
+        if (mentioned.size() >= 4)
+            break;
+    }
+
+    std::ranges::sort(mentioned, [](MentionedBot const& a, MentionedBot const& b)
+    {
+        if (a.firstPos != b.firstPos)
+            return a.firstPos < b.firstPos;
+        return a.bot->GetEntry() < b.bot->GetEntry();
+    });
+
+    return mentioned;
+}
 
 static void ReloadArenaBotOwnerLocks()
 {
@@ -464,20 +517,67 @@ static void TryBotChannelChat(uint32 diff)
 
     std::vector<Creature const*> candidates;
     candidates.reserve(32);
-    for (Creature const* bot : _existingBots)
+    // By leewheel 20260528 - prioritize bots that received nearby player chat events.
+    if (!_botChatDirectMentionEntries.empty())
     {
-        if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
-            continue;
-        if (_botChatCooldownUntilMs[bot->GetEntry()] > nowMs)
-            continue;
-        candidates.push_back(bot);
+        Creature const* firstMentionBot = nullptr;
+        size_t firstPos = std::numeric_limits<size_t>::max();
+        for (Creature const* bot : _existingBots)
+        {
+            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
+                continue;
+            if (!_botChatDirectMentionEntries.contains(bot->GetEntry()))
+                continue;
+            size_t const pos = _botChatDirectMentionFirstPosByEntry.contains(bot->GetEntry()) ?
+                _botChatDirectMentionFirstPosByEntry[bot->GetEntry()] : std::numeric_limits<size_t>::max();
+            if (pos < firstPos)
+            {
+                firstPos = pos;
+                firstMentionBot = bot;
+            }
+        }
+        if (firstMentionBot)
+        {
+            candidates.push_back(firstMentionBot);
+        }
+    }
+    else if (!_botChatUrgentReplyEntries.empty())
+    {
+        for (Creature const* bot : _existingBots)
+        {
+            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
+                continue;
+            if (!_botChatUrgentReplyEntries.contains(bot->GetEntry()))
+                continue;
+            candidates.push_back(bot);
+        }
+    }
+
+    if (candidates.empty())
+    {
+        for (Creature const* bot : _existingBots)
+        {
+            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
+                continue;
+            if (_botChatCooldownUntilMs[bot->GetEntry()] > nowMs)
+                continue;
+            candidates.push_back(bot);
+        }
     }
     if (candidates.empty())
         return;
     Creature const* bot = candidates[urand(0, uint32(candidates.size() - 1))];
+    bool const directMention = _botChatDirectMentionEntries.contains(bot->GetEntry());
+    bool const urgentReply = _botChatUrgentReplyEntries.contains(bot->GetEntry());
+    std::string urgentChannel = urgentReply && _botChatUrgentChannelByEntry.contains(bot->GetEntry())
+        ? _botChatUrgentChannelByEntry[bot->GetEntry()] : std::string();
+    uint32 const urgentMapId = urgentReply && _botChatUrgentMapByEntry.contains(bot->GetEntry())
+        ? _botChatUrgentMapByEntry[bot->GetEntry()] : bot->GetMapId();
     std::string_view channelHint = "世界频道";
+    if (urgentReply && !urgentChannel.empty())
+        channelHint = "频道回复";
     // By leewheel 20260528 - active chat also carries channel hint prompt (world/party/raid).
-    if (bot_ai const* ai = bot->GetBotAI())
+    if (bot_ai const* ai = bot->GetBotAI(); ai && !urgentReply)
     {
         if (Group const* group = ai->GetGroup())
             channelHint = group->isRaidGroup() ? "团队频道" : "小队频道";
@@ -485,25 +585,51 @@ static void TryBotChannelChat(uint32 diff)
     std::string msg = LimitChineseReplyLength(BuildBotChatTemplate(bot, channelHint), 100);
 
     bool sent = false;
-    // By leewheel 20260528 - avoid stale owner->GetGroup() pointer crash; use bot AI's GroupReference target.
-    if (bot_ai const* ai = bot->GetBotAI())
+    // By leewheel 20260528 - channel policy:
+    // 1) urgent player-triggered reply -> same player channel
+    // 2) autonomous talk -> wanderers only, and world channel only
+    bool const preferWorld = BotCfg::IsBotChatWorldEnabled() && (urgentReply || bot->IsWandererBot());
+    if (preferWorld)
     {
-        if (Group const* group = ai->GetGroup())
+        // Creature cannot truly join channel list; we emulate world by broadcasting a channel packet to visible map players.
+        std::string const outChannel = (!urgentChannel.empty() ? urgentChannel : BotCfg::GetBotChatWorldChannelName());
+        Map* outMap = sMapMgr->CreateBaseMap(urgentMapId);
+        if (!outMap)
+            outMap = bot->GetMap();
+        for (MapReference const& ref : outMap->GetPlayers())
         {
-            if (group->isRaidGroup() && BotCfg::IsBotChatRaidEnabled())
+            Player* player = ref.GetSource();
+            if (!player || !player->GetSession())
+                continue;
+            WorldPackets::Chat::Chat packet;
+            packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, msg, 0, outChannel);
+            player->SendDirectMessage(packet.Write());
+        }
+        sent = true;
+    }
+
+    // By leewheel 20260528 - avoid stale owner->GetGroup() pointer crash; use bot AI's GroupReference target.
+    if (!sent)
+    {
+        if (bot_ai const* ai = bot->GetBotAI())
+        {
+            if (Group const* group = ai->GetGroup())
             {
-                SendBotMessageToGroup(bot, group, true, msg);
-                sent = true;
-            }
-            else if (BotCfg::IsBotChatPartyEnabled())
-            {
-                SendBotMessageToGroup(bot, group, false, msg);
-                sent = true;
+                if (group->isRaidGroup() && BotCfg::IsBotChatRaidEnabled())
+                {
+                    SendBotMessageToGroup(bot, group, true, msg);
+                    sent = true;
+                }
+                else if (BotCfg::IsBotChatPartyEnabled())
+                {
+                    SendBotMessageToGroup(bot, group, false, msg);
+                    sent = true;
+                }
             }
         }
     }
 
-    if (!sent && bot->IsWandererBot() && BotCfg::IsBotChatWorldEnabled())
+    if (!sent && BotCfg::IsBotChatWorldEnabled() && (urgentReply || bot->IsWandererBot()))
     {
         // No dedicated channel membership for creatures in core; broadcast to nearby players as world-like global text packet.
         for (MapReference const& ref : bot->GetMap()->GetPlayers())
@@ -521,7 +647,7 @@ static void TryBotChannelChat(uint32 diff)
         Creature const* echoBot = nullptr;
         for (Creature const* candidate : candidates)
         {
-            if (candidate == bot || !candidate->IsWandererBot() || candidate->GetMapId() != bot->GetMapId())
+            if (candidate == bot || candidate->GetMapId() != bot->GetMapId())
                 continue;
             if (_botChatCooldownUntilMs[candidate->GetEntry()] > nowMs)
                 continue;
@@ -552,9 +678,14 @@ static void TryBotChannelChat(uint32 diff)
 
     if (sent)
     {
+        _botChatUrgentReplyEntries.erase(bot->GetEntry());
+        _botChatDirectMentionEntries.erase(bot->GetEntry());
+        _botChatDirectMentionFirstPosByEntry.erase(bot->GetEntry());
+        _botChatUrgentChannelByEntry.erase(bot->GetEntry());
+        _botChatUrgentMapByEntry.erase(bot->GetEntry());
         _botChatGlobalSayMs.push_back(nowMs);
         uint32 const next = urand(BotCfg::GetBotChatIntervalMinMs(), BotCfg::GetBotChatIntervalMaxMs());
-        _botChatCooldownUntilMs[bot->GetEntry()] = nowMs + std::max(next, BotCfg::GetBotChatBotCooldownMs());
+        _botChatCooldownUntilMs[bot->GetEntry()] = directMention ? (nowMs + 5000u) : (nowMs + std::max(next, BotCfg::GetBotChatBotCooldownMs()));
     }
 }
 
@@ -568,6 +699,8 @@ static CreatureTemplateContainer _botsExtraCreatureTemplates;
 static std::unordered_map<uint32, EquipmentInfo const*> _botsExtraCreatureEquipmentTemplates;
 static std::set<uint32> _botsExtraCreaturesToDespawn;
 static std::list<std::pair<uint32, WanderNode const*>> _botsWanderCreaturesToSpawn;
+// By leewheel 20260528 - after a player enters a world map, wanderers stay passive briefly (no rush to clear mobs).
+static std::unordered_map<uint32, time_t> _wandererMapWakeGraceUntil;
 
 static ItemPerBotClassPerBotCategoryMap _botsExtraCreatureSortedGear;
 
@@ -807,8 +940,6 @@ struct WanderingBotsGenerator
 {
 private:
     using NodeVec = std::vector<WanderNode const*>;
-    static constexpr float MIN_WANDERER_SPAWN_DIST_TO_PLAYER = 120.0f;
-
     static bool IsSpawnNodeTooCloseToPlayers(WanderNode const* node, float minDist)
     {
         if (!node)
@@ -966,16 +1097,34 @@ private:
 
         ASSERT(!level_nodes.empty());
 
-        // Prefer nodes not close to players to avoid "bot pops into existence next to me".
-        NodeVec far_nodes;
-        far_nodes.reserve(level_nodes.size());
-        for (WanderNode const* node : level_nodes)
+        float const minSpawnDist = BotCfg::GetWandererMinSpawnDistToPlayer();
+
+        // By leewheel 20260528 - replenish/spawn on maps with no players first (world feels pre-populated).
+        NodeVec spawn_pool;
+        if (BotCfg::EnableWanderingReplenishPreferEmptyMaps())
         {
-            if (!IsSpawnNodeTooCloseToPlayers(node, MIN_WANDERER_SPAWN_DIST_TO_PLAYER))
-                far_nodes.push_back(node);
+            spawn_pool.reserve(level_nodes.size());
+            for (WanderNode const* node : level_nodes)
+            {
+                if (!BotDataMgr::IsWandererMapActive(node->GetMapId()))
+                    spawn_pool.push_back(node);
+            }
         }
 
-        WanderNode const* spawnLoc = Bcore::Containers::SelectRandomContainerElement(far_nodes.empty() ? level_nodes : far_nodes);
+        if (spawn_pool.empty())
+        {
+            spawn_pool.reserve(level_nodes.size());
+            for (WanderNode const* node : level_nodes)
+            {
+                if (!IsSpawnNodeTooCloseToPlayers(node, minSpawnDist))
+                    spawn_pool.push_back(node);
+            }
+        }
+
+        if (spawn_pool.empty())
+            spawn_pool = level_nodes;
+
+        WanderNode const* spawnLoc = Bcore::Containers::SelectRandomContainerElement(spawn_pool);
 
         CreatureTemplate& bot_template = _botsExtraCreatureTemplates[next_bot_id];
         //copy all fields
@@ -1617,11 +1766,88 @@ void BotDataMgr::PushBotChatPvpKillEvent(Creature const* bot, std::string_view v
     _botChatPvpWinStreak[bot->GetEntry()] = std::min<uint8>(10, uint8(_botChatPvpWinStreak[bot->GetEntry()] + 1));
 }
 
+void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message)
+{
+    if (!player || message.empty() || !BotCfg::IsBotChatEnabled())
+        return;
+    if (channelName.empty())
+        return;
+
+    // By leewheel 20260528 - direct mention always forces that bot to answer, even across maps.
+    std::vector<MentionedBot> const mentionedBots = FindMentionedBotsByMessage(message);
+    for (MentionedBot const& mentioned : mentionedBots)
+    {
+        Creature const* bot = mentioned.bot;
+        std::string evt = Bcore::StringFormat("event=PLAYER_MENTION; channel={}; speaker={}; text={}",
+            channelName, player->GetName(), message);
+        PushSceneEventByEntry(bot->GetEntry(), evt);
+        _botChatUrgentReplyEntries.insert(bot->GetEntry());
+        _botChatDirectMentionEntries.insert(bot->GetEntry());
+        _botChatDirectMentionFirstPosByEntry[bot->GetEntry()] = mentioned.firstPos;
+        _botChatUrgentChannelByEntry[bot->GetEntry()] = std::string(channelName);
+        _botChatUrgentMapByEntry[bot->GetEntry()] = player->GetMapId();
+        _botChatCooldownUntilMs[bot->GetEntry()] = 0;
+    }
+
+    // By leewheel 20260528 - player channel messages seed nearby bot reply context (city/world immersion).
+    uint32 seeded = 0;
+    for (Creature const* bot : _existingBots)
+    {
+        if (!bot || !bot->IsInWorld() || !bot->IsAlive())
+            continue;
+        if (bot->GetMapId() != player->GetMapId())
+            continue;
+        // By leewheel 20260528 - player channel interaction is map-wide, not short-range.
+
+        std::string evt = Bcore::StringFormat("event=PLAYER_CHAT; channel={}; speaker={}; text={}",
+            channelName, player->GetName(), message);
+        PushSceneEventByEntry(bot->GetEntry(), evt);
+        _botChatUrgentReplyEntries.insert(bot->GetEntry());
+        _botChatUrgentChannelByEntry[bot->GetEntry()] = std::string(channelName);
+        _botChatUrgentMapByEntry[bot->GetEntry()] = player->GetMapId();
+        _botChatCooldownUntilMs[bot->GetEntry()] = 0; // allow immediate response on next tick
+        ++seeded;
+        if (seeded >= 8)
+            break;
+    }
+}
+
 bool BotDataMgr::IsWandererMapActive(uint32 mapId)
 {
     // By leewheel 20260528 - centralized "map has players" probe for wanderer dormancy/activation.
     Map* map = sMapMgr->CreateBaseMap(mapId);
     return map && map->HavePlayers();
+}
+
+void BotDataMgr::NotifyPlayerEnteredWorldMap(Player const* player)
+{
+    if (!player)
+        return;
+
+    Map const* map = player->GetMap();
+    if (!map || !map->GetEntry()->IsWorldMap())
+        return;
+
+    uint32 const graceSec = BotCfg::GetWandererMapWakeGraceSec();
+    if (!graceSec)
+        return;
+
+    _wandererMapWakeGraceUntil[player->GetMapId()] = GameTime::GetGameTime() + graceSec;
+}
+
+bool BotDataMgr::IsWandererMapInWakeGracePeriod(uint32 mapId)
+{
+    auto itr = _wandererMapWakeGraceUntil.find(mapId);
+    if (itr == _wandererMapWakeGraceUntil.end())
+        return false;
+
+    if (GameTime::GetGameTime() >= itr->second)
+    {
+        _wandererMapWakeGraceUntil.erase(itr);
+        return false;
+    }
+
+    return true;
 }
 
 void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
@@ -2747,14 +2973,22 @@ void BotDataMgr::GenerateDungeonBots(Player const* leader, Group const* group, M
     if (!group->isLFGGroup())
         return;
 
-    const uint32 members_count = group->GetMembersCount();
-    if (members_count >= MAX_GROUP_SIZE)
+    // By leewheel 20260528 - count players + already-grouped hired bots (do not over-spawn LFG fillers)
+    uint32 party_slots_used = group->GetMembersCount();
+    for (GroupBotReference const* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
+        if (itr->GetSource())
+            ++party_slots_used;
+
+    if (party_slots_used >= MAX_GROUP_SIZE)
         return;
 
-    const uint32 bots_to_generate_count = static_cast<uint32>(MAX_GROUP_SIZE) - members_count;
+    const uint32 bots_to_generate_count = static_cast<uint32>(MAX_GROUP_SIZE) - party_slots_used;
+    if (!bots_to_generate_count)
+        return;
+    // end By leewheel 20260528
 
-    BOT_LOG_INFO("npcbots", "DungeonBots: player: {} ({}), map '{}', group size: {}, bots to generate: {}",
-        leader->GetName(), leader->GetGUID().GetCounter(), map->GetId(), members_count, bots_to_generate_count);
+    BOT_LOG_INFO("npcbots", "DungeonBots: player: {} ({}), map '{}', party slots: {}, bots to generate: {}",
+        leader->GetName(), leader->GetGUID().GetCounter(), map->GetId(), party_slots_used, bots_to_generate_count);
 
     roles_arr existing_roles{};
     auto collect_existing_roles = [&existing_roles](ObjectGuid guid) {
@@ -5600,10 +5834,25 @@ public:
     }
 };
 
+// By leewheel 20260528 - start wanderer wake grace when players enter a continent (immersion / less instant mob clearing).
+class BotWandererMapPlayerScript : public PlayerScript
+{
+public:
+    BotWandererMapPlayerScript() : PlayerScript("BotWandererMapPlayerScript") { }
+
+    void OnMapChanged(Player* player) override
+    {
+        if (!player || player->GetSession()->PlayerLoading())
+            return;
+        BotDataMgr::NotifyPlayerEnteredWorldMap(player);
+    }
+};
+
 void AddSC_botdatamgr_scripts()
 {
     new WanderingBotXpGainFormulaScript();
     new BotDataMgrShutdownScript();
+    new BotWandererMapPlayerScript();
 }
 
 #ifdef _MSC_VER

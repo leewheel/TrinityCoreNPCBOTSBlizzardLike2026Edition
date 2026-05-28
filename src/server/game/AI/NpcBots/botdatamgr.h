@@ -221,8 +221,11 @@ public:
     static void PushBotChatSceneEvent(Creature const* bot, std::string_view eventText);
     static void PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName);
     static void PushBotChatPvpKillEvent(Creature const* bot, std::string_view victimName);
+    static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message);
     // By leewheel 20260528 - wandering bots map activity gate (world-map dormancy mode)
     static bool IsWandererMapActive(uint32 mapId);
+    static void NotifyPlayerEnteredWorldMap(Player const* player);
+    static bool IsWandererMapInWakeGracePeriod(uint32 mapId);
     static void DisableAndDespawnWanderer(Creature* bot, char const* reason);
 
     static void LoadNpcBots(bool spawn = true);

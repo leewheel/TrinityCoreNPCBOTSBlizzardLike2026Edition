@@ -24,6 +24,7 @@
 #include "LFGQueue.h"
 #include "LFGMgr.h"
 #include "Log.h"
+#include "botconfig.h" // By leewheel 20260528 - NpcBot.AutoLFG queue fill
 
 namespace lfg
 {
@@ -421,8 +422,12 @@ LfgCompatibility LFGQueue::CheckCompatibility(GuidList check)
         }
     }
 
+    // By leewheel 20260528 - when enabled, solo/partial queues can form proposals (bot roles in queue)
+    bool const fillDungeonWithBots = BotCfg::IsNpcBotModEnabled() &&
+        BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled() && BotCfg::IsNpcBotLfgQueueFillEnabled();
+
     // Group with less that MAX_GROUP_SIZE members always compatible
-    if (check.size() == 1 && numPlayers != MAX_GROUP_SIZE)
+    if (!fillDungeonWithBots && check.size() == 1 && numPlayers != MAX_GROUP_SIZE)
     {
         TC_LOG_DEBUG("lfg.queue.match.compatibility.check", "Guids: ({}) single group. Compatibles", GetDetailedMatchRoles(check));
         LfgQueueDataContainer::iterator itQueue = QueueDataStore.find(check.front());
@@ -519,8 +524,8 @@ LfgCompatibility LFGQueue::CheckCompatibility(GuidList check)
         LFGMgr::CheckGroupRoles(proposalRoles);          // assing new roles
     }
 
-    // Enough players?
-    if (numPlayers != MAX_GROUP_SIZE)
+    // Enough players? (By leewheel 20260528 - skip min-player gate when bot queue fill is on)
+    if (!fillDungeonWithBots && numPlayers != MAX_GROUP_SIZE)
     {
         TC_LOG_DEBUG("lfg.queue.match.compatibility.check", "Guids: ({}) Compatibles but not enough players({})", GetDetailedMatchRoles(check), numPlayers);
         LfgCompatibilityData data(LFG_COMPATIBLES_WITH_LESS_PLAYERS);

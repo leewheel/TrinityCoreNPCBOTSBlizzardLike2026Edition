@@ -4,6 +4,8 @@
 #include "bot_ai.h"
 #include "botcommon.h"
 
+#include <algorithm>
+#include <array>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -48,6 +50,154 @@ static std::string Trim(std::string_view sv)
     while (!sv.empty() && (sv.back() == ' ' || sv.back() == '\t' || sv.back() == '\r' || sv.back() == '\n'))
         sv.remove_suffix(1);
     return std::string(sv);
+}
+
+// By leewheel 20260528 - Qwen3.x / reasoning models may emit thinking blocks; never show them to players.
+static char const kImEndStr[] = { '<', '|', 'i', 'm', '_', 'e', 'n', 'd', '|', '>', '\0' };
+static char const kQwenThinkStartStr[] = { '<', 't', 'h', 'i', 'n', 'k', '>', '\0' };
+static char const kQwenThinkEndStr[] = { '<', '/', 't', 'h', 'i', 'n', 'k', '>', '\0' };
+static char const kRedactedThinkStartStr[] = { '<', 'r', 'e', 'd', 'a', 'c', 't', 'e', 'd', '_', 't', 'h', 'i', 'n', 'k', 'i', 'n', 'g', '>', '\0' };
+static char const kRedactedThinkEndStr[] = { '<', '/', 'r', 'e', 'd', 'a', 'c', 't', 'e', 'd', '_', 't', 'h', 'i', 'n', 'k', 'i', 'n', 'g', '>', '\0' };
+static std::string_view const kImEnd = kImEndStr;
+static std::string_view const kQwenThinkStart = kQwenThinkStartStr;
+static std::string_view const kQwenThinkEnd = kQwenThinkEndStr;
+static std::string_view const kRedactedThinkStart = kRedactedThinkStartStr;
+static std::string_view const kRedactedThinkEnd = kRedactedThinkEndStr;
+static std::array<std::string_view, 4> const kThinkStartTags = {
+    kRedactedThinkStart,
+    kQwenThinkStart,
+    "[THINK]",
+    "<|channel>thought",
+};
+static std::array<std::string_view, 4> const kThinkEndTags = {
+    kRedactedThinkEnd,
+    kQwenThinkEnd,
+    "[/THINK]",
+    "<channel|>",
+};
+
+static void EraseAllSubstrings(std::string& text, std::string_view needle)
+{
+    if (needle.empty())
+        return;
+    for (size_t pos = 0; (pos = text.find(needle, pos)) != std::string::npos;)
+        text.erase(pos, needle.size());
+}
+
+static std::string StripReasoningContent(std::string text)
+{
+    for (size_t si = 0; si < kThinkStartTags.size(); ++si)
+    {
+        std::string_view const start = kThinkStartTags[si];
+        std::string_view const end = kThinkEndTags[si];
+        for (;;)
+        {
+            size_t const begin = text.find(start);
+            if (begin == std::string::npos)
+                break;
+            size_t const close = text.find(end, begin + start.size());
+            if (close == std::string::npos)
+            {
+                text.erase(begin);
+                break;
+            }
+            text.erase(begin, close + end.size() - begin);
+        }
+    }
+
+    for (std::string_view tag : kThinkStartTags)
+        EraseAllSubstrings(text, tag);
+    for (std::string_view tag : kThinkEndTags)
+        EraseAllSubstrings(text, tag);
+
+    EraseAllSubstrings(text, "/think");
+    EraseAllSubstrings(text, "/no_think");
+
+    return Trim(text);
+}
+
+static bool ContainsThinkingMarker(std::string_view text)
+{
+    for (std::string_view tag : kThinkStartTags)
+        if (text.find(tag) != std::string_view::npos)
+            return true;
+    for (std::string_view tag : kThinkEndTags)
+        if (text.find(tag) != std::string_view::npos)
+            return true;
+    return false;
+}
+
+static std::string BuildQwenChatPromptFallback(std::string const& scenePrompt)
+{
+    // Fallback when jinja chat template is unavailable (approximates enable_thinking=false).
+    std::ostringstream oss;
+    oss << "<|im_start|>system\n"
+        << "你是魔兽世界资深玩家。只输出一句简体中文游戏口语。"
+        << "不要输出思考过程，不要输出任何XML或特殊标签。"
+        << "不得承认自己是机器人、AI、程序或脚本。建议不超过20个汉字。"
+        << kImEnd << "\n"
+        << "<|im_start|>user\n"
+        << "场景信息：" << scenePrompt << "\n"
+        << kImEnd << "\n"
+        << "<|im_start|>assistant\n"
+        << kQwenThinkStart << "\n\n" << kQwenThinkEnd << "\n\n";
+    return oss.str();
+}
+
+static std::string FilterGenerationPiece(std::string& carry, std::string_view piece, bool& inThinking)
+{
+    carry.append(piece);
+    std::string visible;
+    visible.reserve(carry.size());
+
+    while (!carry.empty())
+    {
+        if (inThinking)
+        {
+            size_t endPos = std::string::npos;
+            size_t endLen = 0;
+            for (std::string_view endTag : kThinkEndTags)
+            {
+                size_t const p = carry.find(endTag);
+                if (p != std::string::npos && (endPos == std::string::npos || p < endPos))
+                {
+                    endPos = p;
+                    endLen = endTag.size();
+                }
+            }
+            if (endPos == std::string::npos)
+                break;
+            carry.erase(0, endPos + endLen);
+            inThinking = false;
+            continue;
+        }
+
+        size_t startPos = std::string::npos;
+        size_t startLen = 0;
+        for (std::string_view startTag : kThinkStartTags)
+        {
+            size_t const p = carry.find(startTag);
+            if (p != std::string::npos && (startPos == std::string::npos || p < startPos))
+            {
+                startPos = p;
+                startLen = startTag.size();
+            }
+        }
+
+        if (startPos == std::string::npos)
+        {
+            visible.append(carry);
+            carry.clear();
+            break;
+        }
+
+        if (startPos > 0)
+            visible.append(carry, 0, startPos);
+        carry.erase(0, startPos + startLen);
+        inThinking = true;
+    }
+
+    return visible;
 }
 
 static void CaptureByPrefix(std::string const& line, char const* prefix, std::string& out)
@@ -193,6 +343,7 @@ void Engine::Configure(bool enabled, std::string modelPath)
     _runtime->context = llama_new_context_with_model(_runtime->model, cparams);
     _runtime->loaded = (_runtime->context != nullptr);
     _runtime->loadedPath = _modelPath;
+
     {
         std::scoped_lock lk(g_llamaLogMutex);
         g_captureLlamaSummary = false;
@@ -277,12 +428,7 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
     if (!vocab)
         return {};
 
-    std::string fullPrompt = "你是一名资深魔兽世界玩家，只用简体中文、简短口语回复，不谈政治。"
-                             "你必须始终保持玩家口吻，不得承认自己是机器人、AI、程序或脚本。"
-                             "你尽可能使用简短语句发言，建议每次回复不超过20个汉字。";
-    fullPrompt += "\n场景信息：";
-    fullPrompt += prompt;
-    fullPrompt += "\n回复：";
+    std::string const fullPrompt = BuildQwenChatPromptFallback(prompt);
 
     std::vector<llama_token> tokens(fullPrompt.size() + 8);
     int32_t nTok = llama_tokenize(vocab, fullPrompt.c_str(), int32_t(fullPrompt.size()), tokens.data(), int32_t(tokens.size()), true, true);
@@ -307,9 +453,14 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
     llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
 
     std::string output;
+    std::string carry;
+    bool inThinking = false;
     output.reserve(256);
-    // By leewheel 20260528 - limit generation length to reduce per-message CPU time.
-    constexpr int32_t maxGen = 32;
+    carry.reserve(128);
+    // Thinking tokens still consume decode budget even when filtered; allow headroom for short replies.
+    constexpr int32_t maxGen = 96;
+    constexpr size_t targetVisibleChars = 48;
+    size_t visibleChars = 0;
     for (int32_t i = 0; i < maxGen; ++i)
     {
         llama_token token = llama_sampler_sample(smpl, rt->context, -1);
@@ -319,15 +470,28 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
         char piece[256];
         int32_t pieceLen = llama_token_to_piece(vocab, token, piece, int32_t(sizeof(piece)), 0, true);
         if (pieceLen > 0)
-            output.append(piece, piece + pieceLen);
+        {
+            std::string const visible = FilterGenerationPiece(carry, std::string_view(piece, pieceLen), inThinking);
+            if (!visible.empty())
+            {
+                output += visible;
+                visibleChars += visible.size();
+            }
+        }
 
         llama_sampler_accept(smpl, token);
         llama_batch next = llama_batch_get_one(&token, 1);
         if (llama_decode(rt->context, next) < 0)
             break;
+
+        if (visibleChars >= targetVisibleChars)
+            break;
     }
 
     llama_sampler_free(smpl);
+    output = StripReasoningContent(std::move(output));
+    if (output.empty() || ContainsThinkingMarker(output))
+        return {};
     return output;
 #else
     (void)prompt;

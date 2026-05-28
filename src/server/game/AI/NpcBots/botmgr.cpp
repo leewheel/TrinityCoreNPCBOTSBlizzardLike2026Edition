@@ -770,6 +770,28 @@ void BotMgr::RemoveAllSummonedBots()
     }
 }
 
+// By leewheel 20260528 - remove LFG temp bots on dungeon leave; do not dismiss normally hired bots
+void BotMgr::RemoveLfgServiceBots()
+{
+    if (_bots.empty())
+        return;
+
+    GuidVector lfg_bots;
+    lfg_bots.reserve(_bots.size());
+    for (auto const& [guid, bot] : _bots)
+    {
+        if (!bot->IsSummon() || bot->IsTempBot())
+            continue;
+        if (!IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
+            continue;
+        lfg_bots.push_back(guid);
+    }
+
+    for (ObjectGuid guid : lfg_bots)
+        RemoveBot(guid, BOT_REMOVE_UNSUMMON);
+}
+// end By leewheel 20260528
+
 void BotMgr::RemoveAllBots(uint8 removetype)
 {
     while (!_bots.empty())

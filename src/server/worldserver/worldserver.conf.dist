@@ -4770,9 +4770,16 @@ NpcBot.EnrageOnDismiss = 1
 #
 #    NpcBot.DungeonBots.Enable
 #        Description: Allow autogenerating bots for non-full LFG groups entering non-raid dungeons
-#        Default:     0 - (NpcBot.DungeonBots.Enable)
+#        Default:     1 - (Enabled)
 
-NpcBot.DungeonBots.Enable = 0
+NpcBot.DungeonBots.Enable = 1
+
+#
+#    NpcBot.AutoLFG.Enable
+#        Description: Allow LFG queue to match incomplete groups (bots fill roles in queue)
+#        Default:     1 - (Enabled)
+
+NpcBot.AutoLFG.Enable = 1
 
 #
 #    NpcBot.DungeonBots.MaxItemLevel.Ratio
@@ -4795,7 +4802,7 @@ NpcBot.DungeonBots.MaxItemLevel.Ratio = 0,0,0,0,0,0,0,0,0
 #        Note2:       You must have at least this number of non-spawned bots in creature_template.
 #        Default:     0 - (Disabled)
 
-NpcBot.WanderingBots.Continents.Count = 0
+NpcBot.WanderingBots.Continents.Count = 1500
 
 #
 #    NpcBot.WanderingBots.Log.SampleInterval
@@ -4957,15 +4964,15 @@ NpcBot.WanderingBots.Classes.Shaman.Enable            = 1
 NpcBot.WanderingBots.Classes.Mage.Enable              = 1
 NpcBot.WanderingBots.Classes.Warlock.Enable           = 1
 NpcBot.WanderingBots.Classes.Druid.Enable             = 1
-NpcBot.WanderingBots.Classes.Blademaster.Enable       = 1
-NpcBot.WanderingBots.Classes.ObsidianDestroyer.Enable = 1
-NpcBot.WanderingBots.Classes.Archmage.Enable          = 1
-NpcBot.WanderingBots.Classes.Dreadlord.Enable         = 1
-NpcBot.WanderingBots.Classes.SpellBreaker.Enable      = 1
-NpcBot.WanderingBots.Classes.DarkRanger.Enable        = 1
-NpcBot.WanderingBots.Classes.Necromancer.Enable       = 1
-NpcBot.WanderingBots.Classes.SeaWitch.Enable          = 1
-NpcBot.WanderingBots.Classes.CryptLord.Enable         = 1
+NpcBot.WanderingBots.Classes.Blademaster.Enable       = 0
+NpcBot.WanderingBots.Classes.ObsidianDestroyer.Enable = 0
+NpcBot.WanderingBots.Classes.Archmage.Enable          = 0
+NpcBot.WanderingBots.Classes.Dreadlord.Enable         = 0
+NpcBot.WanderingBots.Classes.SpellBreaker.Enable      = 0
+NpcBot.WanderingBots.Classes.DarkRanger.Enable        = 0
+NpcBot.WanderingBots.Classes.Necromancer.Enable       = 0
+NpcBot.WanderingBots.Classes.SeaWitch.Enable          = 0
+NpcBot.WanderingBots.Classes.CryptLord.Enable         = 0
 
 #
 #    NpcBot.WanderingBots.SkipTarget.Questgiver
@@ -4975,8 +4982,45 @@ NpcBot.WanderingBots.Classes.CryptLord.Enable         = 1
 #        Default:     0 - (NpcBot.WanderingBots.SkipTarget.Questgiver)
 #                     0 - (NpcBot.WanderingBots.SkipTarget.Flightmaster)
 
-NpcBot.WanderingBots.SkipTarget.Questgiver   = 0
-NpcBot.WanderingBots.SkipTarget.Flightmaster = 0
+NpcBot.WanderingBots.SkipTarget.Questgiver   = 1
+NpcBot.WanderingBots.SkipTarget.Flightmaster = 1
+
+#
+#    NpcBot.WanderingBots.SkipTarget.PlayerTagged
+#        Description: Wanderers do not attack creatures already tapped/looted by a player
+#        Default:     1 - (Enabled)
+
+NpcBot.WanderingBots.SkipTarget.PlayerTagged = 1
+
+#
+#    NpcBot.WanderingBots.SkipTarget.NearPlayerTarget
+#    NpcBot.WanderingBots.SkipTarget.NearPlayerDist
+#        Description: Wanderers avoid mobs near a player who is targeting or fighting them (quest protection)
+#        Default:     1 / 55.0
+
+NpcBot.WanderingBots.SkipTarget.NearPlayerTarget = 1
+NpcBot.WanderingBots.SkipTarget.NearPlayerDist = 55.0
+
+#
+#    NpcBot.WanderingBots.MapWakeGraceSec
+#        Description: Seconds wanderers stay passive after a player enters a world map (no rush to clear mobs)
+#        Default:     60
+
+NpcBot.WanderingBots.MapWakeGraceSec = 60
+
+#
+#    NpcBot.WanderingBots.Spawn.MinDistToPlayer
+#        Description: Minimum distance from any player when spawning/replenishing wanderers on occupied maps
+#        Default:     180.0
+
+NpcBot.WanderingBots.Spawn.MinDistToPlayer = 180.0
+
+#
+#    NpcBot.WanderingBots.Replenish.PreferEmptyMaps
+#        Description: Prefer spawning new wanderers on maps with no players (startup-like distribution)
+#        Default:     1 - (Enabled)
+
+NpcBot.WanderingBots.Replenish.PreferEmptyMaps = 1
 
 #
 #    NpcBot.HK.Enable

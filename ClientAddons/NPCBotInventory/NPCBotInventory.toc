@@ -1,0 +1,21 @@
+## Interface: 30300
+
+## Title: NPC机器人装备管理
+
+## Notes: 查看与管理 NPC 机器人装备（仅支持LWcore NPCBotsBlizzardLike2026Edition）
+
+## Author: leewheel
+
+## Version: 1.2
+
+
+
+NPCBotInventory_Core.lua
+
+NPCBotInventory_UI.lua
+
+NPCBotInventory.lua
+
+BotManagerUI_Editor.lua
+
+
