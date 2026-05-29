@@ -222,6 +222,9 @@ public:
     static void PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName);
     static void PushBotChatPvpKillEvent(Creature const* bot, std::string_view victimName);
     static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message);
+    // By leewheel 20260529 - wanderer greet tick + vendor stock refresh (no right-click trade).
+    static void UpdateWandererSocial(Creature* bot);
+    static bool TryHandleWhisperToWandererBot(Player* player, std::string_view targetName, std::string_view message);
     // By leewheel 20260528 - wandering bots map activity gate (world-map dormancy mode)
     static bool IsWandererMapActive(uint32 mapId);
     static void NotifyPlayerEnteredWorldMap(Player const* player);

@@ -18132,6 +18132,10 @@ bool bot_ai::GlobalUpdate(uint32 diff)
 
         //Medium-timed updates
 
+        // By leewheel 20260529 - wanderer greet + vendor stock tick (no right-click trade).
+        if (IAmFree() && IsWanderer() && me->IsInWorld() && me->IsAlive() && !me->IsInCombat())
+            BotDataMgr::UpdateWandererSocial(me);
+
         //send stats update for group frames
         if (me->IsInWorld() && !IAmFree())
         {

@@ -159,6 +159,19 @@ public:
     static std::string const& GetBotChatLLMModelPath();
     static std::string const& GetBotChatLLMModelName();
 
+    // By leewheel 20260529 - wanderer greet + world-channel vendor (whisper/COD only).
+    static bool IsWandererGreetEnabled();
+    static float GetWandererGreetDist();
+    static uint32 GetWandererGreetCooldownMs();
+    static bool IsWandererVendorEnabled();
+    static float GetWandererVendorStockChance();
+    static float GetWandererVendorShoutChance();
+    static uint32 GetWandererVendorRefreshMs();
+    static float GetWandererVendorMinVendorMultiplier();
+    static float GetWandererVendorMaxVendorMultiplier();
+    static float GetWandererVendorFloorSpreadMult();
+    static float GetWandererVendorMaterialChance();
+
     static uint32 GetNpcBotCostRent(uint8 level, uint8 botclass);
     static uint32 GetNpcBotCostHire(uint8 level, uint8 botclass);
     static std::string GetNpcBotCostStr(uint8 level, uint8 botclass);

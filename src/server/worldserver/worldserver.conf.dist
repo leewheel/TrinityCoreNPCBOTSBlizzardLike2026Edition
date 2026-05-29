@@ -4230,6 +4230,43 @@ NpcBot.Chat.LLM.ModelName = ""
 NpcBot.Chat.LLM.ModelPath = ""
 
 #
+#    NpcBot.Wanderer.Greet.Enable
+#    NpcBot.Wanderer.Greet.Dist
+#    NpcBot.Wanderer.Greet.CooldownMs
+#        Description: When a wanderer bot meets a player on the road, /say a short greet line (LLM/template channel "打招呼").
+#                     Buff classes still cast buffs via normal AI; greet is chat-only.
+#        Default:     1, 18 yards, 120000 ms per bot+player pair
+#
+NpcBot.Wanderer.Greet.Enable = 1
+NpcBot.Wanderer.Greet.Dist = 18
+NpcBot.Wanderer.Greet.CooldownMs = 120000
+
+#
+#    NpcBot.Wanderer.Vendor.Enable
+#    NpcBot.Wanderer.Vendor.StockChance
+#    NpcBot.Wanderer.Vendor.ShoutChance
+#    NpcBot.Wanderer.Vendor.RefreshMs
+#    NpcBot.Wanderer.Vendor.MinVendorMultiplier
+#    NpcBot.Wanderer.Vendor.MaxVendorMultiplier
+#    NpcBot.Wanderer.Vendor.FloorSpreadMult
+#    NpcBot.Wanderer.Vendor.MaterialChance
+#        Description: World-channel hawking only (no right-click trade). Listings from item_template (rare+ BoE + mats).
+#                     Price vs NPC vendor buyout (SellPrice): floor = random [Min..Min+Spread] * drop-rarity, cap Max.
+#                     Drop rarity from world loot tables (MIN Chance% per item): lower drop rate = higher multiplier (not item quality).
+#                     Example: vendor 1g, Min=3, Spread=2, 0.1% drop -> ~6-8g floor; 50% drop -> ~3-5g floor.
+#                     Player offer below floorCopper = refused. Requires NpcBot.Chat.Enable.
+#        Default:     MinVendorMultiplier 3, MaxVendorMultiplier 20, FloorSpreadMult 2, MaterialChance 45
+#
+NpcBot.Wanderer.Vendor.Enable = 1
+NpcBot.Wanderer.Vendor.StockChance = 35
+NpcBot.Wanderer.Vendor.ShoutChance = 25
+NpcBot.Wanderer.Vendor.MaterialChance = 45
+NpcBot.Wanderer.Vendor.RefreshMs = 600000
+NpcBot.Wanderer.Vendor.MinVendorMultiplier = 3
+NpcBot.Wanderer.Vendor.MaxVendorMultiplier = 20
+NpcBot.Wanderer.Vendor.FloorSpreadMult = 2
+
+#
 #    NpcBot.MaxBots
 #        Description: Maximum number of bots player can hire per level bracket:
 #                     0-9, 10-19, 20,29, ... , 70-79, 80+.

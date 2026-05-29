@@ -54,6 +54,18 @@ static uint32 _botChatBotCooldownMs;
 static std::string _botChatWorldChannelName;
 static std::string _botChatLLMModelPath;
 static std::string _botChatLLMModelName;
+// By leewheel 20260529 - wanderer greet + world vendor.
+static bool _wandererGreetEnable;
+static float _wandererGreetDist;
+static uint32 _wandererGreetCooldownMs;
+static bool _wandererVendorEnable;
+static float _wandererVendorStockChance;
+static float _wandererVendorShoutChance;
+static uint32 _wandererVendorRefreshMs;
+static float _wandererVendorMinVendorMultiplier;
+static float _wandererVendorMaxVendorMultiplier;
+static float _wandererVendorFloorSpreadMult;
+static float _wandererVendorMaterialChance;
 static uint32 _gearBankCapacity;
 static uint32 _gearBankEquipmentSetsCount;
 static uint32 _npcBotsCostHire;
@@ -416,6 +428,17 @@ private:
         _botChatWorldChannelName        = sConfigMgr->GetStringDefault("NpcBot.Chat.WorldChannelName", "World");
         _botChatLLMModelPath            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelPath", "");
         _botChatLLMModelName            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelName", "");
+        _wandererGreetEnable            = sConfigMgr->GetBoolDefault("NpcBot.Wanderer.Greet.Enable", true);
+        _wandererGreetDist              = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Greet.Dist", 18.0f);
+        _wandererGreetCooldownMs        = uint32(std::max<int32>(5000, sConfigMgr->GetIntDefault("NpcBot.Wanderer.Greet.CooldownMs", 120000)));
+        _wandererVendorEnable           = sConfigMgr->GetBoolDefault("NpcBot.Wanderer.Vendor.Enable", true);
+        _wandererVendorStockChance      = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.StockChance", 35.0f);
+        _wandererVendorShoutChance      = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.ShoutChance", 25.0f);
+        _wandererVendorRefreshMs        = uint32(std::max<int32>(60000, sConfigMgr->GetIntDefault("NpcBot.Wanderer.Vendor.RefreshMs", 600000)));
+        _wandererVendorMinVendorMultiplier = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.MinVendorMultiplier", 3.0f);
+        _wandererVendorMaxVendorMultiplier = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.MaxVendorMultiplier", 20.0f);
+        _wandererVendorFloorSpreadMult  = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.FloorSpreadMult", 2.0f);
+        _wandererVendorMaterialChance   = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Vendor.MaterialChance", 45.0f);
         _npcBotsCostHire                = sConfigMgr->GetIntDefault("NpcBot.Cost.Hire", 1000000);
         _npcBotsCostRent                = sConfigMgr->GetIntDefault("NpcBot.Cost.Rent", 0);
         _npcBotUpdateDelayBase          = sConfigMgr->GetIntDefault("NpcBot.UpdateDelay.Base", 0);
@@ -1344,6 +1367,52 @@ std::string const& BotCfg::GetBotChatLLMModelPath()
 std::string const& BotCfg::GetBotChatLLMModelName()
 {
     return _botChatLLMModelName;
+}
+
+bool BotCfg::IsWandererGreetEnabled()
+{
+    return _wandererGreetEnable;
+}
+float BotCfg::GetWandererGreetDist()
+{
+    return std::max(5.0f, _wandererGreetDist);
+}
+uint32 BotCfg::GetWandererGreetCooldownMs()
+{
+    return _wandererGreetCooldownMs;
+}
+bool BotCfg::IsWandererVendorEnabled()
+{
+    return _wandererVendorEnable;
+}
+float BotCfg::GetWandererVendorStockChance()
+{
+    return std::clamp(_wandererVendorStockChance, 0.0f, 100.0f);
+}
+float BotCfg::GetWandererVendorShoutChance()
+{
+    return std::clamp(_wandererVendorShoutChance, 0.0f, 100.0f);
+}
+uint32 BotCfg::GetWandererVendorRefreshMs()
+{
+    return _wandererVendorRefreshMs;
+}
+float BotCfg::GetWandererVendorMinVendorMultiplier()
+{
+    return std::clamp(_wandererVendorMinVendorMultiplier, 1.0f, 50.0f);
+}
+float BotCfg::GetWandererVendorMaxVendorMultiplier()
+{
+    float const minM = GetWandererVendorMinVendorMultiplier();
+    return std::clamp(std::max(minM, _wandererVendorMaxVendorMultiplier), minM, 100.0f);
+}
+float BotCfg::GetWandererVendorFloorSpreadMult()
+{
+    return std::clamp(_wandererVendorFloorSpreadMult, 0.0f, 20.0f);
+}
+float BotCfg::GetWandererVendorMaterialChance()
+{
+    return std::clamp(_wandererVendorMaterialChance, 0.0f, 100.0f);
 }
 
 float BotCfg::GetBotDamageModPhysical()

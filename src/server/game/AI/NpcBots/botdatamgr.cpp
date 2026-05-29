@@ -10,6 +10,7 @@
 #include "botspell.h"
 #include "bottext.h"
 #include "botwanderful.h"
+#include "bot_wanderer_vendor.h"
 #include "bpet_ai.h"
 #include "CharacterCache.h"
 #include "Containers.h"
@@ -156,6 +157,8 @@ static std::unordered_map<uint32, size_t> _botChatDirectMentionFirstPosByEntry;
 static std::unordered_map<uint32, std::string> _botChatUrgentChannelByEntry;
 static std::unordered_map<uint32, uint32> _botChatUrgentMapByEntry;
 static uint32 _botChatTickerMs = 0;
+// By leewheel 20260529 - per (bot, player) wanderer greet cooldown.
+static std::unordered_map<uint64, uint32> _wandererGreetCooldownUntilMs;
 
 struct MentionedBot
 {
@@ -362,6 +365,31 @@ static std::string PopLatestSceneEvent(uint32 botEntry)
     return ev;
 }
 
+static std::string BuildBotChatTemplate(Creature const* bot, std::string_view channelHint);
+
+// By leewheel 20260529 - wanderer meets player on the road: dedicated greet prompt + /say.
+static void TryWandererGreetPlayer(Creature* bot, Player* player)
+{
+    if (!bot || !player || player->IsGameMaster())
+        return;
+
+    uint64 const key = (uint64(bot->GetEntry()) << 32) | player->GetGUID().GetCounter();
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    auto itr = _wandererGreetCooldownUntilMs.find(key);
+    if (itr != _wandererGreetCooldownUntilMs.end() && itr->second > nowMs)
+        return;
+
+    _wandererGreetCooldownUntilMs[key] = nowMs + BotCfg::GetWandererGreetCooldownMs();
+
+    PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+        "event=PLAYER_NEARBY_MEET; player={}; map={}; level={}",
+        player->GetName(), bot->GetMapId(), uint32(player->GetLevel())));
+
+    std::string msg = BuildBotChatTemplate(bot, "打招呼");
+    if (!msg.empty())
+        bot->Say(msg, LANG_UNIVERSAL, player);
+}
+
 static std::string BuildBotChatTemplate(Creature const* bot, std::string_view channelHint)
 {
     auto raceNameZh = [](uint8 race) -> std::string_view
@@ -409,7 +437,15 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
             bot->GetMapId(), p.GetPositionX(), p.GetPositionY(), pvpKiller);
     }
     std::string channelStyle = "正常语气";
-    if (channelHint == "世界频道")
+    if (channelHint == "打招呼")
+    {
+        channelStyle = "路边偶遇真人玩家，可自然提到你刚给了对方职业辅助或buff，热情简短，像老玩家碰面";
+    }
+    else if (channelHint == "世界频道贸易")
+    {
+        channelStyle = "在世界频道吆喝出售装绑装备，必须含物品名与起拍价，并提示密语你谈价，一句话，像真人跳蚤市场";
+    }
+    else if (channelHint == "世界频道")
         channelStyle = "可轻度挑衅和阵营喊话，但不要低俗刷屏";
     else if (channelHint == "小队频道" || channelHint == "团队频道")
         channelStyle = "以战术协作为主，语气克制";
@@ -474,6 +510,23 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         llmReply = NpcBotChatLLM::Engine::Instance().GenerateReply(bot, persona);
     if (!llmReply.empty())
         persona = std::move(llmReply);
+    else if (channelHint == "打招呼")
+    {
+        static std::string_view const greetLines[] =
+        {
+            "嘿，需要个buff吗？",
+            "路过打个招呼，祝你好运！",
+            "嗨，冒险者，路上小心。",
+            "刚给你上了个辅助，有需要再喊我。"
+        };
+        persona = std::string(greetLines[urand(0, std::size(greetLines) - 1)]);
+    }
+    else if (channelHint == "世界频道贸易")
+    {
+        std::string tradeLine = WandererVendor::BuildTradeShoutFallback(bot);
+        if (!tradeLine.empty())
+            persona = std::move(tradeLine);
+    }
 
     // By leewheel 20260528 - lightweight safe gate (Chinese + no politics).
     if (!LooksMostlyChinese(persona) || ContainsBlockedPoliticalTerms(persona))
@@ -581,6 +634,14 @@ static void TryBotChannelChat(uint32 diff)
     {
         if (Group const* group = ai->GetGroup())
             channelHint = group->isRaidGroup() ? "团队频道" : "小队频道";
+    }
+    // By leewheel 20260529 - world-channel trade shout (whisper negotiate + COD mail only).
+    if (bot->IsWandererBot() && !urgentReply && channelHint == "世界频道" && WandererVendor::WantsTradeWorldShout(bot))
+    {
+        std::string tradeEv = WandererVendor::BuildTradeSceneEvent(bot);
+        if (!tradeEv.empty())
+            PushSceneEventByEntry(bot->GetEntry(), tradeEv);
+        channelHint = "世界频道贸易";
     }
     std::string msg = LimitChineseReplyLength(BuildBotChatTemplate(bot, channelHint), 100);
 
@@ -1766,6 +1827,54 @@ void BotDataMgr::PushBotChatPvpKillEvent(Creature const* bot, std::string_view v
     _botChatPvpWinStreak[bot->GetEntry()] = std::min<uint8>(10, uint8(_botChatPvpWinStreak[bot->GetEntry()] + 1));
 }
 
+void BotDataMgr::UpdateWandererSocial(Creature* bot)
+{
+    if (!bot || !bot->IsInWorld() || !bot->IsAlive() || !bot->IsWandererBot())
+        return;
+
+    WandererVendor::OnWandererTick(bot);
+
+    if (!BotCfg::IsWandererGreetEnabled() || !BotCfg::IsBotChatEnabled())
+        return;
+
+    if (bot->IsInCombat())
+        return;
+
+    Map* map = bot->GetMap();
+    if (!map)
+        return;
+
+    float const greetDist = BotCfg::GetWandererGreetDist();
+    bool greeted = false;
+    for (MapReference const& ref : map->GetPlayers())
+    {
+        if (greeted)
+            break;
+
+        Player* player = ref.GetSource();
+        if (!player || !player->IsAlive() || player->IsGameMaster())
+            continue;
+
+        if (!bot->IsWithinDistInMap(player, greetDist))
+            continue;
+
+        TryWandererGreetPlayer(bot, player);
+        greeted = true;
+    }
+}
+
+bool BotDataMgr::TryHandleWhisperToWandererBot(Player* player, std::string_view targetName, std::string_view message)
+{
+    if (!player || targetName.empty() || message.empty())
+        return false;
+
+    Creature const* bot = FindBot(targetName, player->GetSession()->GetSessionDbcLocale());
+    if (!bot || !bot->IsInWorld() || !bot->IsWandererBot())
+        return false;
+
+    return WandererVendor::TryHandlePlayerWhisper(player, const_cast<Creature*>(bot), message);
+}
+
 void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message)
 {
     if (!player || message.empty() || !BotCfg::IsBotChatEnabled())
@@ -2933,7 +3042,7 @@ void BotDataMgr::LoadWanderMap(bool reload, bool force_all_maps)
 
 void BotDataMgr::GenerateWanderingBots()
 {
-    const uint32 wandering_bots_desired = BotCfg::GetDesiredWanderingBotsCount();
+    uint32 wandering_bots_desired = BotCfg::GetDesiredWanderingBotsCount();
 
     if (wandering_bots_desired == 0)
         return;
@@ -2942,21 +3051,32 @@ void BotDataMgr::GenerateWanderingBots()
 
     uint32 oldMSTime = getMSTime();
 
-    uint32 maxbots = sBotGen->GetSpareBotsCount();
-    uint32 enabledbots = sBotGen->GetEnabledBotsCount();
+    uint32 const maxbots = sBotGen->GetSpareBotsCount();
+    uint32 const enabledbots = sBotGen->GetEnabledBotsCount();
 
+    // By leewheel 20260529 - do not ASSERT on misconfiguration; spawn as many as possible so worldserver can start.
     if (maxbots < wandering_bots_desired)
     {
-        BOT_LOG_FATAL("server.loading", "Only {} out of {} bots of enabled classes aren't spawned. Desired amount of wandering bots ({}) cannot be created. Aborting!",
-            maxbots, enabledbots, wandering_bots_desired);
-        ASSERT(false);
+        BOT_LOG_ERROR("server.loading",
+            "Only {} out of {} enabled-class bot templates are available for wandering spawn (desired {}). Spawning up to {} instead.",
+            maxbots, enabledbots, wandering_bots_desired, maxbots);
+        wandering_bots_desired = maxbots;
+    }
+
+    if (!wandering_bots_desired)
+    {
+        BOT_LOG_ERROR("server.loading", "Cannot spawn wandering bots: no spare bot templates. Set NpcBot.WanderingBots.Continents.Count to 0 or add npcbot creature templates.");
+        return;
     }
 
     uint32 spawned_count = 0;
     if (!sBotGen->GenerateWanderingBotsToSpawn(wandering_bots_desired, -1, -1, false, nullptr, nullptr, spawned_count))
+        BOT_LOG_ERROR("server.loading", "Failed to queue all {} wandering bots ({} queued). Check wander nodes / maps.", wandering_bots_desired, spawned_count);
+
+    if (!spawned_count)
     {
-        BOT_LOG_FATAL("server.loading", "Failed to spawn all {} bots ({} succeeded)!", wandering_bots_desired, spawned_count);
-        ASSERT(false);
+        BOT_LOG_ERROR("server.loading", "No wandering bots were queued. Verify `creature_template_npcbot_wander_nodes` and NpcBot.WanderingBots.Continents.* settings.");
+        return;
     }
 
     BOT_LOG_INFO("server.loading", ">> Set up spawning of {} wandering bots in {} ms", spawned_count, GetMSTimeDiffToNow(oldMSTime));
@@ -3835,6 +3955,9 @@ void BotDataMgr::CreateGeneratedBotsSortedGear()
     BOT_LOG_INFO("server.loading", ">> Sorted wandering bots gear ({} relic entries, {} shirt seeds, paladin relic pool={}) in {} ms",
         relics_pushed_to_pool, body_seeds_pushed, _botsExtraCreatureSortedGear[BOT_GENERATED_WANDERING][BOT_CLASS_PALADIN][BOT_SLOT_RANGED][0].size(),
         GetMSTimeDiffToNow(oldMSTime));
+
+    // By leewheel 20260529 - vendor listings from item_template (not bot equipment).
+    WandererVendor::BuildCatalog();
 }
 
 bool BotDataMgr::UsesGeneratedBotRangedSlot(uint8 botclass)

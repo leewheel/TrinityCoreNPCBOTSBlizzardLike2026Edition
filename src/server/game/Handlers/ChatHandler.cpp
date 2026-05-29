@@ -295,7 +295,16 @@ void WorldSession::HandleChatMessage(ChatMsg type, Language lang, std::string ms
             }
 
             Player* receiver = ObjectAccessor::FindConnectedPlayerByName(target);
-            if (!receiver || (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID())))
+            if (!receiver)
+            {
+                // By leewheel 20260529 - whisper to wanderer bot name (world vendor negotiate / COD).
+                if (lang != LANG_ADDON && BotDataMgr::TryHandleWhisperToWandererBot(sender, target, msg))
+                    break;
+
+                SendPlayerNotFoundNotice(target);
+                return;
+            }
+            if (lang != LANG_ADDON && !receiver->isAcceptWhispers() && receiver->GetSession()->HasPermission(rbac::RBAC_PERM_CAN_FILTER_WHISPERS) && !receiver->IsInWhisperWhiteList(sender->GetGUID()))
             {
                 SendPlayerNotFoundNotice(target);
                 return;
