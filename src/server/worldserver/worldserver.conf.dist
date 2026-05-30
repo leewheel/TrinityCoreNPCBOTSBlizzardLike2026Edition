@@ -4843,7 +4843,7 @@ NpcBot.DungeonBots.MaxItemLevel.Ratio = 0,0,0,0,0,0,0,0,0
 #        Note2:       You must have at least this number of non-spawned bots in creature_template.
 #        Default:     0 - (Disabled)
 
-NpcBot.WanderingBots.Continents.Count = 1500
+NpcBot.WanderingBots.Continents.Count = 2000
 
 #
 #    NpcBot.WanderingBots.Log.SampleInterval

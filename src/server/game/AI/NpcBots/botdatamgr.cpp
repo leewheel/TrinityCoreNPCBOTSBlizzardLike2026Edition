@@ -1787,29 +1787,57 @@ void BotDataMgr::UpdateWandererLogSampler(uint32 diff)
     s_wandererPeriodStats.Clear();
 }
 
-static uint32 CountActiveWanderersInWorld()
+// Counts wanderers already allocated (in world, off-grid, or queued to spawn).
+static uint32 CountAllocatedWanderers()
 {
-    uint32 count = 0;
+    uint32 count = uint32(_botsWanderCreaturesToSpawn.size());
     for (Creature const* bot : _existingBots)
-        if (bot && bot->IsInWorld() && bot->IsWandererBot())
+        if (bot && bot->IsWandererBot())
             ++count;
     return count;
 }
 
 void BotDataMgr::TryReplenishWanderingBots()
 {
-    uint32 const desired = BotCfg::GetDesiredWanderingBotsCount();
-    if (!desired)
+    uint32 const desiredConfig = BotCfg::GetDesiredWanderingBotsCount();
+    if (!desiredConfig)
         return;
 
-    uint32 const active = CountActiveWanderersInWorld();
-    if (active >= desired)
+    uint32 const allocated = CountAllocatedWanderers();
+    if (allocated >= desiredConfig)
         return;
 
-    uint32 const need = desired - active;
+    uint32 const spare = sBotGen->GetSpareBotsCount();
+    uint32 need = desiredConfig - allocated;
+    need = std::min(need, spare);
+    if (!need)
+    {
+        // Config may exceed available templates (e.g. players hired bots since startup).
+        static bool loggedCapacityCeiling = false;
+        if (!loggedCapacityCeiling)
+        {
+            loggedCapacityCeiling = true;
+            BOT_LOG_INFO("npcbots",
+                "TryReplenishWanderingBots: wanderer template pool exhausted (allocated {}, config desired {}, spare {}). "
+                "Reduce NpcBot.WanderingBots.Continents.Count or expect fewer roaming bots while bots are hired.",
+                allocated, desiredConfig, spare);
+        }
+        return;
+    }
+
     uint32 spawned = 0;
     if (!sBotGen->GenerateWanderingBotsToSpawn(need, -1, -1, false, nullptr, nullptr, spawned))
-        BOT_LOG_WARN("npcbots", "TryReplenishWanderingBots: failed to queue {} wanderers (active {}, desired {})", need, active, desired);
+    {
+        static time_t lastWarnTime = 0;
+        time_t const now = GameTime::GetGameTime();
+        if (now - lastWarnTime >= 300)
+        {
+            lastWarnTime = now;
+            BOT_LOG_WARN("npcbots",
+                "TryReplenishWanderingBots: failed to queue {} wanderers (allocated {}, config desired {}, spare {})",
+                need, allocated, desiredConfig, spare);
+        }
+    }
     else if (spawned)
         s_wandererPeriodStats.RecordReplenishQueued(spawned);
 }
