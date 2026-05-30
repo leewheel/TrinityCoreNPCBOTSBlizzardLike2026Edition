@@ -134,7 +134,7 @@ static std::string BuildQwenChatPromptFallback(std::string const& scenePrompt)
     oss << "<|im_start|>system\n"
         << "你是魔兽世界资深玩家。只输出一句简体中文游戏口语。"
         << "不要输出思考过程，不要输出任何XML或特殊标签。"
-        << "不得承认自己是机器人、AI、程序或脚本。建议不超过20个汉字。"
+        << "不得承认自己是机器人、AI、程序或脚本。建议50-80个汉字，在有限字数内把意思表达清楚。"
         << kImEnd << "\n"
         << "<|im_start|>user\n"
         << "场景信息：" << scenePrompt << "\n"
@@ -496,7 +496,7 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
     carry.reserve(128);
     // Thinking tokens still consume decode budget even when filtered; allow headroom for short replies.
     constexpr int32_t maxGen = 96;
-    constexpr size_t targetVisibleChars = 48;
+    constexpr size_t targetVisibleChars = 72;
     size_t visibleChars = 0;
     for (int32_t i = 0; i < maxGen; ++i)
     {

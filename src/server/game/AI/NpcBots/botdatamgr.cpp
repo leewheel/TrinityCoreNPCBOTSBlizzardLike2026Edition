@@ -477,7 +477,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
             persona = Bcore::StringFormat(
                 "身份=魔兽老玩家;种族={};职业={};专精={};状态={};频道={};"
                 "事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};"
-                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量20字内,绝不超100字,只输出一句自然话。",
+                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
                 raceNameZh(ex->race), className, specName, action, channelHint,
                 recentEvent.empty() ? "无" : recentEvent,
                 uint32(winStreak), uint32(loseStreak),
@@ -489,7 +489,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         {
             persona = Bcore::StringFormat(
                 "身份=魔兽老玩家;状态={};频道={};事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};"
-                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量20字内,绝不超100字,只输出一句自然话。",
+                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
                 action, channelHint,
                 recentEvent.empty() ? "无" : recentEvent,
                 uint32(winStreak), uint32(loseStreak),
@@ -502,7 +502,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     {
         persona = Bcore::StringFormat(
             "人格={};状态={};频道={};事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};语气={};"
-            "规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量20字内,绝不超100字,只输出一句自然话。",
+            "规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
             persona, action, channelHint,
             recentEvent.empty() ? "无" : recentEvent,
             uint32(winStreak), uint32(loseStreak),
@@ -542,7 +542,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
 
 static void SendBotMessageToGroup(Creature const* bot, Group const* group, bool isRaid, std::string const& text)
 {
-    if (!group)
+    if (!group || !bot)
         return;
     // By leewheel 20260528 - enforce hard cap for proactive party/raid messages at send layer.
     std::string const cappedText = LimitChineseReplyLength(text, 100);
@@ -552,7 +552,14 @@ static void SendBotMessageToGroup(Creature const* bot, Group const* group, bool 
         if (!member || !member->GetSession())
             continue;
         WorldPackets::Chat::Chat packet;
-        packet.Initialize(isRaid ? CHAT_MSG_RAID : CHAT_MSG_PARTY, LANG_UNIVERSAL, bot, member, cappedText);
+        // CHAT_MSG_PARTY/RAID omit creature SenderName on 3.3.5 clients; MONSTER_PARTY includes it.
+        if (isRaid)
+        {
+            std::string const raidText = Bcore::StringFormat("{}：{}", bot->GetName(), cappedText);
+            packet.Initialize(CHAT_MSG_RAID, LANG_UNIVERSAL, bot, member, raidText);
+        }
+        else
+            packet.Initialize(CHAT_MSG_MONSTER_PARTY, LANG_UNIVERSAL, bot, member, cappedText);
         member->SendDirectMessage(packet.Write());
     }
 }

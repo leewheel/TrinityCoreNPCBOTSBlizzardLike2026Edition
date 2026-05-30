@@ -283,17 +283,49 @@ namespace
         }
     }
 
-    // By leewheel 20260528 - BMU list name must match in-world bot (appearance / live creature).
-    std::string ResolveBotNameForBmu(uint32 entry, CreatureTemplate const* proto)
+    Creature const* FindPlayerBotByEntry(Player const* player, uint32 entry)
     {
+        if (!player)
+            return nullptr;
+
+        BotMgr const* mgr = player->GetBotMgr();
+        if (!mgr)
+            return nullptr;
+
+        BotMap const* botMap = mgr->GetBotMap();
+        if (!botMap)
+            return nullptr;
+
+        for (auto const& [guid, bot] : *botMap)
+        {
+            if (bot && bot->GetEntry() == entry)
+                return bot;
+        }
+
+        return nullptr;
+    }
+
+    // By leewheel 20260528 - BMU list name must match in-world bot (live creature first).
+    std::string ResolveBotNameForBmu(Player const* player, uint32 entry, CreatureTemplate const* proto)
+    {
+        if (Creature const* bot = FindPlayerBotByEntry(player, entry))
+        {
+            std::string const liveName = bot->GetName();
+            if (!liveName.empty())
+                return liveName;
+        }
+
         if (Creature const* bot = BotDataMgr::FindBot(entry))
         {
-            if (bot->IsInWorld())
-            {
-                std::string const liveName = bot->GetName();
-                if (!liveName.empty())
-                    return liveName;
-            }
+            std::string const liveName = bot->GetName();
+            if (!liveName.empty())
+                return liveName;
+        }
+
+        if (CreatureTemplate const* extra = BotDataMgr::GetBotExtraCreatureTemplate(entry))
+        {
+            if (!extra->Name.empty())
+                return extra->Name;
         }
 
         if (std::string_view customName = BotDataMgr::GetNpcBotAppearanceName(entry); !customName.empty())
@@ -302,11 +334,13 @@ namespace
         return proto ? proto->Name : "Bot";
     }
 
-    uint32 ResolveBotDisplayIdForBmu(uint32 entry, CreatureTemplate const* proto)
+    uint32 ResolveBotDisplayIdForBmu(Player const* player, uint32 entry, CreatureTemplate const* proto)
     {
+        if (Creature const* bot = FindPlayerBotByEntry(player, entry))
+            return bot->GetDisplayId();
+
         if (Creature const* bot = BotDataMgr::FindBot(entry))
-            if (bot->IsInWorld())
-                return bot->GetDisplayId();
+            return bot->GetDisplayId();
 
         return proto ? proto->GetFirstValidModelId() : 0;
     }
@@ -317,8 +351,8 @@ namespace
         if (!proto)
             return;
 
-        std::string const botName = ResolveBotNameForBmu(entry, proto);
-        uint32 const displayId = ResolveBotDisplayIdForBmu(entry, proto);
+        std::string const botName = ResolveBotNameForBmu(player, entry, proto);
+        uint32 const displayId = ResolveBotDisplayIdForBmu(player, entry, proto);
         uint32 race = 0;
         uint8 gender = 0;
         std::string className = "Bot";

@@ -44,11 +44,13 @@ function BMU_CountBotsInDb()
     return n
 end
 
--- 向服务端请求 REFRESH 前清空列表，避免历史上同步过的 entry 残留在界面
+-- 向服务端请求 REFRESH 前清空机器人列表，保留 minimap 等玩家设置
 function BMU_ClearBotListDb()
     if not db then return end
-    for entry in pairs(db) do
-        db[entry] = nil
+    for entry, info in pairs(db) do
+        if type(info) == "table" and info.name then
+            db[entry] = nil
+        end
     end
 end
 
