@@ -1573,11 +1573,29 @@ void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
     //npcbot - player accepted proposal; make LFG bots accept too
     if (accept && guid.IsPlayer())
     {
-        for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
+        if (Player* acceptingPlayer = ObjectAccessor::FindConnectedPlayer(guid))
         {
-            if (itPlayers->first.IsPlayer())
-                continue;
-            itPlayers->second.accept = LfgAnswer(accept);
+            if (acceptingPlayer->GetBotMgr() && acceptingPlayer->HaveBot())
+            {
+                for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
+                {
+                    ObjectGuid bguid = itPlayers->first;
+                    if (bguid.IsPlayer())
+                        continue;
+                    const bool is_dungeon_bot_lfg_guid = bguid.GetEntry() == BOT_GIVER_ENTRY;
+                    if (!is_dungeon_bot_lfg_guid && !acceptingPlayer->GetBotMgr()->GetBot(bguid))
+                        continue;
+
+                    itPlayers->second.accept = is_dungeon_bot_lfg_guid ? LFG_ANSWER_AGREE : LfgAnswer(accept);
+                }
+            }
+        }
+
+        // Proposal slots may list reserved world bots not hired yet; auto-accept all bot entries
+        for (auto& [bguid, pp] : proposal.players)
+        {
+            if (bguid.IsCreature() && pp.accept != LFG_ANSWER_AGREE)
+                pp.accept = LFG_ANSWER_AGREE;
         }
     }
     //end npcbot
