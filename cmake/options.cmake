@@ -54,6 +54,8 @@ option(WITH_WARNINGS    "Show all warnings during compile"                      
 option(WITH_WARNINGS_AS_ERRORS "Treat warnings as errors"                             0)
 option(WITH_COREDEBUG   "Include additional debug-code in core"                       0)
 option(WITH_NPCBOT_LLM_EMBED "Enable embedded llama.cpp for NPCBot chat"              1)
+# By leewheel 20260529 - NPCBot LLM targets GPU inference by default (player CPUs stay free for WoW).
+option(WITH_NPCBOT_LLM_GPU   "Build embedded llama.cpp with CUDA (required for release; OFF=dev CPU-only)" 1)
 option(WITHOUT_METRICS  "Disable metrics reporting (i.e. InfluxDB and Grafana)"       0)
 option(WITH_DETAILED_METRICS  "Enable detailed metrics reporting (i.e. time each session takes to update)" 0)
 option(COPY_CONF        "Copy authserver and worldserver .conf.dist files to the project dir"      1)

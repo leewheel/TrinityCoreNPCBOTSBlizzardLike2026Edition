@@ -63,6 +63,34 @@ set_target_properties(worldserver
     COMPILE_WARNING_AS_ERROR ${WITH_WARNINGS_AS_ERRORS}
     FOLDER "server")
 
+# By leewheel 20260529 - ship CUDA runtime next to worldserver for NpcBot LLM GPU inference.
+if(WIN32 AND WITH_NPCBOT_LLM_EMBED AND WITH_NPCBOT_LLM_GPU)
+  include(NpcBotCuda)
+  npcbot_setup_cudatoolkit_root()
+  find_package(CUDAToolkit QUIET)
+  if(CUDAToolkit_FOUND)
+    set(_npcbot_cuda_runtime_dlls
+      "${CUDAToolkit_ROOT}/bin/x64/cudart64_${CUDAToolkit_VERSION_MAJOR}.dll"
+      "${CUDAToolkit_ROOT}/bin/x64/cublas64_${CUDAToolkit_VERSION_MAJOR}.dll"
+      "${CUDAToolkit_ROOT}/bin/x64/cublasLt64_${CUDAToolkit_VERSION_MAJOR}.dll")
+
+    foreach(_npcbot_cuda_dll IN LISTS _npcbot_cuda_runtime_dlls)
+      if(EXISTS "${_npcbot_cuda_dll}")
+        add_custom_command(TARGET worldserver POST_BUILD
+          COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${_npcbot_cuda_dll}"
+            $<TARGET_FILE_DIR:worldserver>
+          COMMENT "Copy ${_npcbot_cuda_dll} for NpcBot LLM GPU")
+        install(FILES "${_npcbot_cuda_dll}" DESTINATION "${CMAKE_INSTALL_PREFIX}")
+      else()
+        message(WARNING "NpcBot LLM GPU runtime DLL not found: ${_npcbot_cuda_dll}")
+      endif()
+    endforeach()
+
+    unset(_npcbot_cuda_runtime_dlls)
+  endif()
+endif()
+
 # Add all dynamic projects as dependency to the worldserver
 if(WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES)
   add_dependencies(worldserver ${WORLDSERVER_DYNAMIC_SCRIPT_MODULES_DEPENDENCIES})

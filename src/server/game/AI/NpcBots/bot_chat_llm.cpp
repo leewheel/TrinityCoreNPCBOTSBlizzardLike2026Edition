@@ -257,6 +257,7 @@ struct RuntimeState
 #endif
     std::mutex inferMutex;
     bool loaded = false;
+    bool useGpu = false;
     std::string loadedPath;
 };
 
@@ -266,12 +267,13 @@ Engine& Engine::Instance()
     return engine;
 }
 
-void Engine::Configure(bool enabled, std::string modelPath)
+void Engine::Configure(bool enabled, std::string modelPath, bool useGpu)
 {
     if (!_runtime)
         _runtime = new RuntimeState();
 
     _enabled = enabled;
+    _useGpu = useGpu;
     _modelPath = std::move(modelPath);
 
     if (!_modelPath.empty())
@@ -297,7 +299,7 @@ void Engine::Configure(bool enabled, std::string modelPath)
     if (!_enabled || _modelPath.empty())
         return;
 
-    if (_runtime->loaded && _runtime->loadedPath == _modelPath)
+    if (_runtime->loaded && _runtime->loadedPath == _modelPath && _runtime->useGpu == useGpu)
         return;
 
     if (_runtime->context)
@@ -324,6 +326,23 @@ void Engine::Configure(bool enabled, std::string modelPath)
     // By leewheel 20260528 - CPU-friendly default: keep inference threads low to avoid starving gameplay/desktop.
     cparams.n_threads = 4;
 
+    bool const gpuAvailable = llama_supports_gpu_offload();
+    if (useGpu)
+    {
+        if (!gpuAvailable)
+        {
+            BOT_LOG_ERROR("npcbots",
+                "NpcBot.Chat.LLM.Device=gpu but no GPU backend in this worldserver build. "
+                "Rebuild with CMake -DWITH_NPCBOT_LLM_GPU=ON (requires NVIDIA CUDA Toolkit). "
+                "LLM chat is disabled until GPU build is used.");
+            _runtime->loaded = false;
+            return;
+        }
+        mparams.n_gpu_layers = -1; // all layers to VRAM
+    }
+    else
+        mparams.n_gpu_layers = 0;
+
     {
         std::scoped_lock lk(g_llamaLogMutex);
         g_captureLlamaSummary = true;
@@ -343,6 +362,7 @@ void Engine::Configure(bool enabled, std::string modelPath)
     _runtime->context = llama_new_context_with_model(_runtime->model, cparams);
     _runtime->loaded = (_runtime->context != nullptr);
     _runtime->loadedPath = _modelPath;
+    _runtime->useGpu = gpuAvailable && mparams.n_gpu_layers != 0;
 
     {
         std::scoped_lock lk(g_llamaLogMutex);
@@ -358,6 +378,20 @@ void Engine::Configure(bool enabled, std::string modelPath)
         if (summary.nCtx.empty())
             summary.nCtx = std::to_string(llama_n_ctx(_runtime->context));
 
+        std::string deviceLine;
+        if (_runtime->useGpu)
+            deviceLine = Bcore::StringFormat(
+                "GPU 加速（n_gpu_layers=all，backend_ptrs.size() = {}）",
+                summary.backendPtrs.empty() ? "?" : summary.backendPtrs);
+        else if (useGpu && !gpuAvailable)
+            deviceLine = Bcore::StringFormat(
+                "纯 CPU（配置为 gpu，但未编译 GPU 后端；backend_ptrs.size() = {}）",
+                summary.backendPtrs.empty() ? "1" : summary.backendPtrs);
+        else
+            deviceLine = Bcore::StringFormat(
+                "纯 CPU（n_gpu_layers=0，backend_ptrs.size() = {}）",
+                summary.backendPtrs.empty() ? "1" : summary.backendPtrs);
+
         BOT_LOG_INFO("npcbots",
             "模型已成功加载\n\n"
             "文件：{}\n"
@@ -367,9 +401,8 @@ void Engine::Configure(bool enabled, std::string modelPath)
             "参数量：{}\n"
             "文件大小：{}\n"
             "LLM线程：{}\n"
-            "推理设备\n\n"
-            "纯 CPU（所有层都分配到 CPU）\n"
-            "没有 GPU 后端参与（backend_ptrs.size() = {}，CPU only）\n"
+            "推理设备：{}\n"
+            "配置项 NpcBot.Chat.LLM.Device = {}\n"
             "关键运行配置\n\n"
             "上下文：n_ctx = {}\n"
             "n_ctx_train = {}（日志提示当前仅用到训练上限的一小部分，这是正常提示）\n"
@@ -387,7 +420,8 @@ void Engine::Configure(bool enabled, std::string modelPath)
             summary.params.empty() ? "unknown" : summary.params,
             summary.fileSize.empty() ? "unknown" : summary.fileSize,
             cparams.n_threads,
-            summary.backendPtrs.empty() ? "1" : summary.backendPtrs,
+            deviceLine,
+            useGpu ? "gpu" : "cpu",
             summary.nCtx.empty() ? "unknown" : summary.nCtx,
             summary.nCtxTrain.empty() ? "unknown" : summary.nCtxTrain,
             summary.cpuMappedMiB.empty() ? "unknown" : summary.cpuMappedMiB,
@@ -419,10 +453,13 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
         return {};
 
     RuntimeState* rt = _runtime;
-    if (!rt || !rt->loaded || !rt->model || !rt->context)
+    if (!rt || !rt->loaded)
         return {};
 
 #ifdef TRINITY_NPCBOT_LLM_EMBED
+    if (!rt->model || !rt->context)
+        return {};
+
     std::scoped_lock lk(rt->inferMutex);
     const llama_vocab* vocab = llama_model_get_vocab(rt->model);
     if (!vocab)

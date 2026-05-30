@@ -4222,12 +4222,16 @@ NpcBot.Chat.WorldChannelName = "World"
 #    NpcBot.Chat.LLM.Enable
 #    NpcBot.Chat.LLM.ModelName
 #    NpcBot.Chat.LLM.ModelPath
+#    NpcBot.Chat.LLM.Device
 #        Description: Embedded llama.cpp model selection.
 #                     Preferred: fill ModelName only, model is resolved from .\\ClientData\\Ai.Mod\\<ModelName>.
 #                     ModelPath is legacy fallback and still supported.
+#                     Device: gpu (default, offload to GPU — recommended for players) or cpu (dev only).
+#                     Release worldserver must be built with WITH_NPCBOT_LLM_GPU=ON (NVIDIA CUDA). Without GPU backend, LLM stays off.
 NpcBot.Chat.LLM.Enable = 0
 NpcBot.Chat.LLM.ModelName = ""
 NpcBot.Chat.LLM.ModelPath = ""
+NpcBot.Chat.LLM.Device = gpu
 
 #
 #    NpcBot.Wanderer.Greet.Enable

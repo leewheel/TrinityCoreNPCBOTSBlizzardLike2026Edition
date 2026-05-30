@@ -215,13 +215,15 @@ class BotDataMgr
 {
 public:
     static void Update(uint32 diff);
+    // By leewheel 20260529 - load LLM at world startup (visible in server.loading / console).
+    static void InitNpcBotLLM();
     static void UpdateWandererLogSampler(uint32 diff);
     static void UpdateWandererGridRecycle(uint32 diff);
     static void TryReplenishWanderingBots();
     static void PushBotChatSceneEvent(Creature const* bot, std::string_view eventText);
     static void PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName);
     static void PushBotChatPvpKillEvent(Creature const* bot, std::string_view victimName);
-    static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message);
+    static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message, Group const* group = nullptr);
     // By leewheel 20260529 - wanderer greet tick + vendor stock refresh (no right-click trade).
     static void UpdateWandererSocial(Creature* bot);
     static bool TryHandleWhisperToWandererBot(Player* player, std::string_view targetName, std::string_view message);

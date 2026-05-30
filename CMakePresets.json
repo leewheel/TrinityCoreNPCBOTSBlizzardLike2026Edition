@@ -1,0 +1,32 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 18,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "windows-npcbot-llm-gpu",
+      "displayName": "Windows x64 — NpcBot LLM GPU (default)",
+      "description": "RelWithDebInfo + WITH_NPCBOT_LLM_EMBED/GPU ON + auto CUDA",
+      "generator": "Visual Studio 17 2022",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "WITH_NPCBOT_LLM_EMBED": "ON",
+        "WITH_NPCBOT_LLM_GPU": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "windows-npcbot-llm-gpu-relwithdebinfo",
+      "displayName": "Build worldserver (RelWithDebInfo)",
+      "configurePreset": "windows-npcbot-llm-gpu",
+      "configuration": "RelWithDebInfo",
+      "targets": ["worldserver"]
+    }
+  ]
+}

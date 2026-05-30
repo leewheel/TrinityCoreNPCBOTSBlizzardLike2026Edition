@@ -57,6 +57,25 @@ include(ConfigureScripts)
 # set default buildoptions and print them
 include(cmake/options.cmake)
 
+# By leewheel 20260529 - make NpcBot LLM GPU a top-level CMake decision so
+# Visual Studio/CMake GUI caches GGML_CUDA before llama.cpp is added.
+if(WITH_NPCBOT_LLM_EMBED AND WITH_NPCBOT_LLM_GPU)
+  include(NpcBotCuda)
+  npcbot_setup_cudatoolkit_root()
+  find_package(CUDAToolkit REQUIRED)
+  set(ENV{CUDA_PATH} "${CUDAToolkit_ROOT}")
+  set(ENV{CUDA_PATH_V${CUDAToolkit_VERSION_MAJOR}_${CUDAToolkit_VERSION_MINOR}} "${CUDAToolkit_ROOT}")
+  if(NOT CMAKE_CUDA_ARCHITECTURES OR CMAKE_CUDA_ARCHITECTURES STREQUAL "native")
+    if(CUDAToolkit_VERSION VERSION_LESS "13")
+      set(CMAKE_CUDA_ARCHITECTURES "61;75;80;86;89" CACHE STRING "CUDA architectures for NpcBot LLM GPU backend" FORCE)
+    else()
+      set(CMAKE_CUDA_ARCHITECTURES "75;80;86;89;90;120a-real;121a-real" CACHE STRING "CUDA architectures for NpcBot LLM GPU backend" FORCE)
+    endif()
+  endif()
+  set(GGML_CUDA ON CACHE BOOL "ggml: use CUDA" FORCE)
+  message(STATUS "NpcBot LLM: GGML_CUDA=ON (CUDA ${CUDAToolkit_VERSION}, arch ${CMAKE_CUDA_ARCHITECTURES}, GPU inference enabled)")
+endif()
+
 # turn off PCH totally if enabled (hidden setting, mainly for devs)
 if(NOPCH)
   set(USE_COREPCH 0)
@@ -86,7 +105,7 @@ include(cmake/showoptions.cmake)
 
 # Force UTF-8 source encoding to support Chinese comments
 if(MSVC)
-    add_compile_options(/utf-8)
+    add_compile_options($<$<COMPILE_LANGUAGE:C,CXX>:/utf-8>)
 else()
     add_compile_options(-finput-charset=UTF-8 -fexec-charset=UTF-8)
 endif()

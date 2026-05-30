@@ -119,7 +119,9 @@ void LFGPlayerScript::OnMapChanged(Player* player)
         if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
         {
             Player* spawnLeader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
-            if (!spawnLeader)
+            // Spawn service bots on the player that is already inside this dungeon instance.
+            // If the queue leader is still outside, using the leader would summon bots on the wrong map.
+            if (!spawnLeader || !spawnLeader->IsInMap(player))
                 spawnLeader = player;
             BotDataMgr::GenerateDungeonBots(spawnLeader, group, map);
             // By leewheel 20260523 - ensure LFG fill-in bots have best gear after spawn (no command needed)

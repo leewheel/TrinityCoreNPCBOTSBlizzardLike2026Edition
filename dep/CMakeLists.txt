@@ -32,6 +32,22 @@ if(SERVERS)
   add_subdirectory(readline)
   add_subdirectory(gsoap)
   if(WITH_NPCBOT_LLM_EMBED AND EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/llama.cpp/CMakeLists.txt")
+    if(WITH_NPCBOT_LLM_GPU)
+      include(NpcBotCuda)
+      npcbot_setup_cudatoolkit_root()
+      find_package(CUDAToolkit QUIET)
+      if(NOT CUDAToolkit_FOUND)
+        message(FATAL_ERROR
+          "NpcBot LLM GPU build requires NVIDIA CUDA Toolkit (WITH_NPCBOT_LLM_GPU=ON).\n"
+          "Install CUDA from https://developer.nvidia.com/cuda-downloads then re-run CMake.\n"
+          "If already installed, set CUDAToolkit_ROOT to e.g. \"C:/Program Files/NVIDIA GPU Computing Toolkit/CUDA/v13.3\".\n"
+          "For a temporary CPU-only developer build, set -DWITH_NPCBOT_LLM_GPU=OFF")
+      endif()
+      set(GGML_CUDA ON CACHE BOOL "Enable CUDA for ggml" FORCE)
+      message(STATUS "NpcBot LLM: GGML_CUDA=ON (CUDA ${CUDAToolkit_VERSION}, GPU inference enabled)")
+    else()
+      message(WARNING "NpcBot LLM: WITH_NPCBOT_LLM_GPU=OFF — CPU-only llama build (not for player release)")
+    endif()
     add_subdirectory(llama.cpp)
     if(MSVC AND TARGET llama)
       # By leewheel 20260528 - fix MSVC char8_t literal incompatibility in bundled llama.cpp sources.

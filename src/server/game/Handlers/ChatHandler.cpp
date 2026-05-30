@@ -376,6 +376,8 @@ void WorldSession::HandleChatMessage(ChatMsg type, Language lang, std::string ms
             WorldPackets::Chat::Chat packet;
             packet.Initialize(ChatMsg(type), Language(lang), sender, nullptr, msg);
             group->BroadcastPacket(packet.Write(), false, group->GetMemberGroup(GetPlayer()->GetGUID()));
+            if (lang != LANG_ADDON)
+                BotDataMgr::OnPlayerChannelChat(sender, group->isRaidGroup() ? "团队频道" : "小队频道", msg, group);
             break;
         }
         case CHAT_MSG_GUILD:

@@ -156,6 +156,7 @@ public:
     static uint32 GetBotChatBotCooldownMs();
     static std::string const& GetBotChatWorldChannelName();
     static bool IsBotChatLLMEnabled();
+    static bool IsBotChatLLMUseGpu();
     static std::string const& GetBotChatLLMModelPath();
     static std::string const& GetBotChatLLMModelName();
 

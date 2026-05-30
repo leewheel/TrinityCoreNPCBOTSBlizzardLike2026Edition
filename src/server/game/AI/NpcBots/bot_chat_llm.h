@@ -15,13 +15,14 @@ class Engine
 public:
     static Engine& Instance();
 
-    void Configure(bool enabled, std::string modelPath);
+    void Configure(bool enabled, std::string modelPath, bool useGpu);
     [[nodiscard]] bool IsEnabled() const;
     [[nodiscard]] std::string GenerateReply(Creature const* bot, std::string const& prompt) const;
 
 private:
     RuntimeState* _runtime = nullptr;
     bool _enabled = false;
+    bool _useGpu = false;
     std::string _modelPath;
 };
 }

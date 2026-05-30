@@ -81,6 +81,7 @@ void BotMgr::Initialize()
     BotDataMgr::LoadNpcBotGearSets();
     BotDataMgr::LoadNpcBotMgrData();
     BotDataMgr::DeleteOldLogs();
+    BotDataMgr::InitNpcBotLLM();
 }
 
 uint8 BotMgr::GetNpcBotsCount() const

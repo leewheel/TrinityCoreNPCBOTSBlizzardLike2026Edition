@@ -42,6 +42,7 @@
 #include <limits>
 #include <numeric>
 #include <deque>
+#include <filesystem>
 #include <unordered_map>
 
 #ifdef _WIN32
@@ -367,6 +368,11 @@ static std::string PopLatestSceneEvent(uint32 botEntry)
 
 static std::string BuildBotChatTemplate(Creature const* bot, std::string_view channelHint);
 
+static bool IsBotChatGroupChannel(std::string_view channelName)
+{
+    return channelName == "小队频道" || channelName == "团队频道";
+}
+
 // By leewheel 20260529 - wanderer meets player on the road: dedicated greet prompt + /say.
 static void TryWandererGreetPlayer(Creature* bot, Player* player)
 {
@@ -626,8 +632,14 @@ static void TryBotChannelChat(uint32 diff)
         ? _botChatUrgentChannelByEntry[bot->GetEntry()] : std::string();
     uint32 const urgentMapId = urgentReply && _botChatUrgentMapByEntry.contains(bot->GetEntry())
         ? _botChatUrgentMapByEntry[bot->GetEntry()] : bot->GetMapId();
+    bool const urgentPartyChannel = urgentChannel == "小队频道";
+    bool const urgentRaidChannel = urgentChannel == "团队频道";
     std::string_view channelHint = "世界频道";
-    if (urgentReply && !urgentChannel.empty())
+    if (urgentPartyChannel)
+        channelHint = "小队频道";
+    else if (urgentRaidChannel)
+        channelHint = "团队频道";
+    else if (urgentReply && !urgentChannel.empty())
         channelHint = "频道回复";
     // By leewheel 20260528 - active chat also carries channel hint prompt (world/party/raid).
     if (bot_ai const* ai = bot->GetBotAI(); ai && !urgentReply)
@@ -649,7 +661,7 @@ static void TryBotChannelChat(uint32 diff)
     // By leewheel 20260528 - channel policy:
     // 1) urgent player-triggered reply -> same player channel
     // 2) autonomous talk -> wanderers only, and world channel only
-    bool const preferWorld = BotCfg::IsBotChatWorldEnabled() && (urgentReply || bot->IsWandererBot());
+    bool const preferWorld = BotCfg::IsBotChatWorldEnabled() && (bot->IsWandererBot() || (urgentReply && !urgentPartyChannel && !urgentRaidChannel));
     if (preferWorld)
     {
         // Creature cannot truly join channel list; we emulate world by broadcasting a channel packet to visible map players.
@@ -690,7 +702,7 @@ static void TryBotChannelChat(uint32 diff)
         }
     }
 
-    if (!sent && BotCfg::IsBotChatWorldEnabled() && (urgentReply || bot->IsWandererBot()))
+    if (!sent && BotCfg::IsBotChatWorldEnabled() && (bot->IsWandererBot() || (urgentReply && !urgentPartyChannel && !urgentRaidChannel)))
     {
         // No dedicated channel membership for creatures in core; broadcast to nearby players as world-like global text packet.
         for (MapReference const& ref : bot->GetMap()->GetPlayers())
@@ -1869,24 +1881,50 @@ bool BotDataMgr::TryHandleWhisperToWandererBot(Player* player, std::string_view 
         return false;
 
     Creature const* bot = FindBot(targetName, player->GetSession()->GetSessionDbcLocale());
-    if (!bot || !bot->IsInWorld() || !bot->IsWandererBot())
+    if (!bot || !bot->IsInWorld())
         return false;
 
-    return WandererVendor::TryHandlePlayerWhisper(player, const_cast<Creature*>(bot), message);
+    Creature* mutableBot = const_cast<Creature*>(bot);
+    if (bot->IsWandererBot() && WandererVendor::TryHandlePlayerWhisper(player, mutableBot, message))
+        return true;
+
+    if (!BotCfg::IsBotChatEnabled() || !bot->IsAlive())
+        return false;
+
+    PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+        "event=PLAYER_WHISPER; speaker={}; text={}", player->GetName(), message));
+    std::string reply = BuildBotChatTemplate(bot, "密语");
+    if (reply.empty())
+        reply = "收到，我在。";
+    mutableBot->Whisper(reply, LANG_UNIVERSAL, player);
+    _botChatCooldownUntilMs[bot->GetEntry()] = GameTime::GetGameTimeMS() + 5000u;
+    return true;
 }
 
-void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message)
+void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message, Group const* group)
 {
     if (!player || message.empty() || !BotCfg::IsBotChatEnabled())
         return;
     if (channelName.empty())
         return;
 
-    // By leewheel 20260528 - direct mention always forces that bot to answer, even across maps.
+    bool const groupChannel = IsBotChatGroupChannel(channelName);
+    Group const* playerGroup = groupChannel ? (group ? group : player->GetGroup()) : nullptr;
+    if (groupChannel && !playerGroup)
+        return;
+
+    // By leewheel 20260528 - direct mention always forces that bot to answer, except party/raid is scoped to the player's group.
     std::vector<MentionedBot> const mentionedBots = FindMentionedBotsByMessage(message);
     for (MentionedBot const& mentioned : mentionedBots)
     {
         Creature const* bot = mentioned.bot;
+        if (groupChannel)
+        {
+            bot_ai const* ai = bot->GetBotAI();
+            if (!ai || ai->GetGroup() != playerGroup)
+                continue;
+        }
+
         std::string evt = Bcore::StringFormat("event=PLAYER_MENTION; channel={}; speaker={}; text={}",
             channelName, player->GetName(), message);
         PushSceneEventByEntry(bot->GetEntry(), evt);
@@ -1906,7 +1944,13 @@ void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view chan
             continue;
         if (bot->GetMapId() != player->GetMapId())
             continue;
-        // By leewheel 20260528 - player channel interaction is map-wide, not short-range.
+        if (groupChannel)
+        {
+            bot_ai const* ai = bot->GetBotAI();
+            if (!ai || ai->GetGroup() != playerGroup)
+                continue;
+        }
+        // By leewheel 20260528 - non-party channel interaction is map-wide, not short-range.
 
         std::string evt = Bcore::StringFormat("event=PLAYER_CHAT; channel={}; speaker={}; text={}",
             channelName, player->GetName(), message);
@@ -1968,19 +2012,65 @@ void BotDataMgr::UpdateWandererGridRecycle(uint32 diff)
     (void)diff;
 }
 
+namespace
+{
+    bool s_llmEnableCache = false;
+    bool s_llmUseGpuCache = false;
+    std::string s_llmPathCache;
+
+    void RefreshNpcBotLLMConfig()
+    {
+        bool const llmEnableNow = BotCfg::IsBotChatLLMEnabled();
+        bool const llmUseGpuNow = BotCfg::IsBotChatLLMUseGpu();
+        std::string llmPathNow = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
+        if (llmEnableNow == s_llmEnableCache && llmPathNow == s_llmPathCache && llmUseGpuNow == s_llmUseGpuCache)
+            return;
+
+        NpcBotChatLLM::Engine::Instance().Configure(llmEnableNow, llmPathNow, llmUseGpuNow);
+        s_llmEnableCache = llmEnableNow;
+        s_llmUseGpuCache = llmUseGpuNow;
+        s_llmPathCache = std::move(llmPathNow);
+    }
+}
+
+void BotDataMgr::InitNpcBotLLM()
+{
+#ifndef TRINITY_NPCBOT_LLM_EMBED
+    if (BotCfg::IsBotChatLLMEnabled())
+        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: config enabled but worldserver was built WITHOUT embedded llama "
+            "(enable WITH_NPCBOT_LLM_EMBED and rebuild game/worldserver)");
+    return;
+#endif
+
+    if (!BotCfg::IsBotChatLLMEnabled())
+    {
+        TC_LOG_INFO("server.loading", ">> NpcBot LLM: disabled (NpcBot.Chat.LLM.Enable = 0)");
+        RefreshNpcBotLLMConfig();
+        return;
+    }
+
+    std::string const modelRef = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
+    if (modelRef.empty())
+    {
+        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: enabled but NpcBot.Chat.LLM.ModelName / ModelPath is empty");
+        RefreshNpcBotLLMConfig();
+        return;
+    }
+
+    TC_LOG_INFO("server.loading", ">> NpcBot LLM: loading '{}' (Device={}, cwd={})...",
+        modelRef, BotCfg::IsBotChatLLMUseGpu() ? "gpu" : "cpu", std::filesystem::current_path().string());
+
+    RefreshNpcBotLLMConfig();
+
+    if (NpcBotChatLLM::Engine::Instance().IsEnabled())
+        TC_LOG_INFO("server.loading", ">> NpcBot LLM: ready (see npcbots log for GPU/VRAM details)");
+    else
+        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: failed to load — check Server.log, model under .\\ClientData\\Ai.Mod\\, and GPU build");
+}
+
 void BotDataMgr::Update(uint32 diff)
 {
-    // By leewheel 20260528 - avoid per-tick LLM reconfigure, only refresh when settings changed.
-    static bool llmEnableCache = false;
-    static std::string llmPathCache;
-    bool const llmEnableNow = BotCfg::IsBotChatLLMEnabled();
-    std::string llmPathNow = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
-    if (llmEnableNow != llmEnableCache || llmPathNow != llmPathCache)
-    {
-        NpcBotChatLLM::Engine::Instance().Configure(llmEnableNow, llmPathNow);
-        llmEnableCache = llmEnableNow;
-        llmPathCache = llmPathNow;
-    }
+    RefreshNpcBotLLMConfig();
 
     UpdateWandererLogSampler(diff);
     UpdateWandererGridRecycle(diff);

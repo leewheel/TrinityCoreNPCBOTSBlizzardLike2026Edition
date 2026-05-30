@@ -10,6 +10,8 @@
 #include "ScriptMgr.h"
 #include "World.h"
 
+#include <cctype>
+
 /*
 Npc Bot Config by Trickerer (onlysuffering@gmail.com)
 */
@@ -54,6 +56,7 @@ static uint32 _botChatBotCooldownMs;
 static std::string _botChatWorldChannelName;
 static std::string _botChatLLMModelPath;
 static std::string _botChatLLMModelName;
+static bool _botChatLLMUseGpu;
 // By leewheel 20260529 - wanderer greet + world vendor.
 static bool _wandererGreetEnable;
 static float _wandererGreetDist;
@@ -428,6 +431,12 @@ private:
         _botChatWorldChannelName        = sConfigMgr->GetStringDefault("NpcBot.Chat.WorldChannelName", "World");
         _botChatLLMModelPath            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelPath", "");
         _botChatLLMModelName            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelName", "");
+        {
+            std::string device = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.Device", "gpu");
+            for (char& c : device)
+                c = char(std::tolower(static_cast<unsigned char>(c)));
+            _botChatLLMUseGpu = (device == "gpu" || device == "cuda" || device == "vulkan" || device == "1");
+        }
         _wandererGreetEnable            = sConfigMgr->GetBoolDefault("NpcBot.Wanderer.Greet.Enable", true);
         _wandererGreetDist              = sConfigMgr->GetFloatDefault("NpcBot.Wanderer.Greet.Dist", 18.0f);
         _wandererGreetCooldownMs        = uint32(std::max<int32>(5000, sConfigMgr->GetIntDefault("NpcBot.Wanderer.Greet.CooldownMs", 120000)));
@@ -1358,6 +1367,10 @@ std::string const& BotCfg::GetBotChatWorldChannelName()
 bool BotCfg::IsBotChatLLMEnabled()
 {
     return _botChatLLMEnable;
+}
+bool BotCfg::IsBotChatLLMUseGpu()
+{
+    return _botChatLLMUseGpu;
 }
 std::string const& BotCfg::GetBotChatLLMModelPath()
 {

@@ -3273,6 +3273,9 @@ function RefreshBotList(filterText)
     -- Draw Buttons
     local y = 0
     for i, info in ipairs(sorted) do
+        local botEntry = info.entry
+        local botName = info.name
+        local botClassName = info.className
         local b = BotButtonsPool[i]
         if not b then
             if not InCombatLockdown() then
@@ -3287,20 +3290,20 @@ function RefreshBotList(filterText)
             end
         end
         
-        b.botEntry = info.entry
+        b.botEntry = botEntry
         b:SetPoint("TOPLEFT", 5, y)
         
         -- Apply Class Colors to the list
-        local cColor = classColors[info.className] or "FFFFFF"
-        b:SetText("|cff" .. cColor .. info.name .. "|r")
+        local cColor = classColors[botClassName] or "FFFFFF"
+        b:SetText("|cff" .. cColor .. botName .. "|r")
         
         -- Configure secure action
         SafeSetAttribute(b, "type", "macro")
-        SafeSetAttribute(b, "macrotext", "/target " .. info.name)
+        SafeSetAttribute(b, "macrotext", "/target " .. botName)
         
         -- Set script
-        b:SetScript("PostClick", function()
-            SelectBot(info.entry)
+        b:SetScript("PostClick", function(self)
+            SelectBot(self.botEntry)
         end)
         
         b:Show()
