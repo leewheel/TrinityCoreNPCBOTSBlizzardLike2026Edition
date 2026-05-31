@@ -114,28 +114,7 @@ void LFGPlayerScript::OnMapChanged(Player* player)
                 player->GetSession()->SendNameQueryOpcode(member->GetGUID());
         //end npcbot
 
-        //npcbot
-        // By leewheel 20260528 - any member entering LFG dungeon may trigger fill (not only group leader)
-        if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
-        {
-            Player* spawnLeader = ObjectAccessor::FindPlayer(group->GetLeaderGUID());
-            // Spawn service bots on the player that is already inside this dungeon instance.
-            // If the queue leader is still outside, using the leader would summon bots on the wrong map.
-            if (!spawnLeader || !spawnLeader->IsInMap(player))
-                spawnLeader = player;
-            BotDataMgr::GenerateDungeonBots(spawnLeader, group, map);
-            // By leewheel 20260523 - ensure LFG fill-in bots have best gear after spawn (no command needed)
-            for (GroupBotReference* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
-            {
-                Creature* bot = itr->GetSource();
-                if (!bot || !bot->IsNPCBot() || !bot->GetBotAI())
-                    continue;
-                if (!IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
-                    continue;
-                bot->GetBotAI()->ApplyServiceRandomEquip();
-            }
-            // end By leewheel 20260523
-        }
+        //npcbot - bots hired in LFGMgr::MakeNewGroup (LWCorePlus style), no runtime spawn here
         //end npcbot
 
         if (sLFGMgr->selectedRandomLfgDungeon(player->GetGUID()))
@@ -156,10 +135,9 @@ void LFGPlayerScript::OnMapChanged(Player* player)
         }
 
         //npcbot
-        // By leewheel 20260528 - leave dungeon: remove LFG service bots only, keep hired companions
-        if (group && group->isLFGGroup())
-            if (sLFGMgr->GetState(group->GetGUID()) >= LFG_STATE_FINISHED_DUNGEON)
-                player->GetBotMgr()->RemoveLfgServiceBots();
+        // By leewheel 20260531 - left instance or finished LFG: dismiss service bots (not only FINISHED_DUNGEON state)
+        if (player->GetBotMgr() && !player->GetMap()->IsDungeon())
+            player->GetBotMgr()->RemoveLfgServiceBots();
         //end npcbot
 
         player->RemoveAurasDueToSpell(LFG_SPELL_LUCK_OF_THE_DRAW);
@@ -241,8 +219,9 @@ void LFGGroupScript::OnRemoveMember(Group* group, ObjectGuid guid, RemoveMethod 
             player->CastSpell(player, LFG_SPELL_DUNGEON_DESERTER, true);
         else if (method == GROUP_REMOVEMETHOD_KICK_LFG)
             player->RemoveAurasDueToSpell(LFG_SPELL_DUNGEON_COOLDOWN);
-        //else if (state == LFG_STATE_BOOT)
-            // Update internal kick cooldown of kicked
+
+        if (player->GetBotMgr())
+            player->GetBotMgr()->RemoveLfgServiceBots();
 
         player->GetSession()->SendLfgUpdateParty(LfgUpdateData(LFG_UPDATETYPE_LEADER_UNK1));
         if (isLFG && player->GetMap()->IsDungeon())            // Teleport player out the dungeon
@@ -261,6 +240,10 @@ void LFGGroupScript::OnDisband(Group* group)
 
     ObjectGuid gguid = group->GetGUID();
     TC_LOG_DEBUG("lfg", "LFGScripts::OnDisband [{}]", gguid.ToString());
+
+    // Do not dismiss bots here: RemoveLfgServiceBots() calls RemoveBotFromGroup() and
+    // reenters Group::Disband. Stale LFG bots are cleared on LeaveLfg / JoinLfg / MakeNewGroup
+    // and by BotMgr::TryDismissStaleLfgServiceBots() on the next tick.
 
     sLFGMgr->RemoveGroupData(gguid);
 }

@@ -107,6 +107,8 @@ static bool _enableNpcBotsArenas;
 static bool _enableDungeonFinder;
 static bool _enableDungeonFinderBotsGen;
 static bool _enableLfgQueueFill; // By leewheel 20260528 - NpcBot.AutoLFG.Enable (LFG queue role fill)
+static bool _enableRaidFinderBotsGen; // By leewheel 20260530 - NpcBot.RaidBots.Enable
+static bool _enableRaidLfgAutoFill;   // By leewheel 20260530 - NpcBot.AutoLFG.Raid.Enable
 static bool _enableNpcBotsPremade;
 static bool _limitNpcBotsDungeons;
 static bool _limitNpcBotsRaids;
@@ -413,6 +415,8 @@ private:
         _enableDungeonFinderBotsGen     = sConfigMgr->GetBoolDefault("NpcBot.DungeonBots.Enable", true);
         // By leewheel 20260528 - allow incomplete LFG groups to match via bot-filled queue roles
         _enableLfgQueueFill             = sConfigMgr->GetBoolDefault("NpcBot.AutoLFG.Enable", true);
+        _enableRaidFinderBotsGen        = sConfigMgr->GetBoolDefault("NpcBot.RaidBots.Enable", true);
+        _enableRaidLfgAutoFill          = sConfigMgr->GetBoolDefault("NpcBot.AutoLFG.Raid.Enable", true);
         _enableNpcBotsPremade           = sConfigMgr->GetBoolDefault("NpcBot.Premade.Enable", false);
         _limitNpcBotsDungeons           = sConfigMgr->GetBoolDefault("NpcBot.Limit.Dungeon", true);
         _limitNpcBotsRaids              = sConfigMgr->GetBoolDefault("NpcBot.Limit.Raid", true);
@@ -424,10 +428,10 @@ private:
         _botChatPartyEnable             = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable.Party", true);
         _botChatRaidEnable              = sConfigMgr->GetBoolDefault("NpcBot.Chat.Enable.Raid", true);
         _botChatLLMEnable               = sConfigMgr->GetBoolDefault("NpcBot.Chat.LLM.Enable", false);
-        _botChatIntervalMinMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MinMs", 30000)));
-        _botChatIntervalMaxMs           = uint32(std::max<int32>(int32(_botChatIntervalMinMs), sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MaxMs", 90000)));
-        _botChatGlobalMaxPerMinute      = uint32(std::max<int32>(1, sConfigMgr->GetIntDefault("NpcBot.Chat.Global.MaxPerMinute", 20)));
-        _botChatBotCooldownMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.BotCooldownMs", 45000)));
+        _botChatIntervalMinMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MinMs", 8000)));
+        _botChatIntervalMaxMs           = uint32(std::max<int32>(int32(_botChatIntervalMinMs), sConfigMgr->GetIntDefault("NpcBot.Chat.Interval.MaxMs", 22000)));
+        _botChatGlobalMaxPerMinute      = uint32(std::max<int32>(1, sConfigMgr->GetIntDefault("NpcBot.Chat.Global.MaxPerMinute", 32)));
+        _botChatBotCooldownMs           = uint32(std::max<int32>(1000, sConfigMgr->GetIntDefault("NpcBot.Chat.BotCooldownMs", 12000)));
         _botChatWorldChannelName        = sConfigMgr->GetStringDefault("NpcBot.Chat.WorldChannelName", "World");
         _botChatLLMModelPath            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelPath", "");
         _botChatLLMModelName            = sConfigMgr->GetStringDefault("NpcBot.Chat.LLM.ModelName", "");
@@ -849,6 +853,16 @@ bool BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled()
 bool BotCfg::IsNpcBotLfgQueueFillEnabled()
 {
     return _enableLfgQueueFill;
+}
+
+bool BotCfg::IsNpcBotRaidFinderBotGenerationEnabled()
+{
+    return _enableRaidFinderBotsGen;
+}
+
+bool BotCfg::IsNpcBotRaidLfgAutoFillEnabled()
+{
+    return _enableRaidLfgAutoFill;
 }
 
 bool BotCfg::LimitNpcBotsInDungeons()

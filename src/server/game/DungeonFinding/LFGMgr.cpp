@@ -17,6 +17,7 @@
 
 #include "LFGMgr.h"
 #include "Common.h"
+#include "Containers.h"
 #include "DatabaseEnv.h"
 #include "DBCStores.h"
 #include "DisableMgr.h"
@@ -43,6 +44,9 @@
 
 //npcbot
 #include "botconfig.h"
+#include "botdatamgr.h"
+#include "botcommon.h"
+#include "bot_ai.h"
 #include "botmgr.h"
 #include "Chat.h"
 #include "Creature.h"
@@ -50,6 +54,49 @@
 
 namespace lfg
 {
+
+namespace
+{
+uint8 GetLfgInstanceTargetSize(LFGDungeonData const* dungeon)
+{
+    if (!dungeon)
+        return MAX_GROUP_SIZE;
+
+    if (MapEntry const* mapEntry = sMapStore.LookupEntry(dungeon->map))
+    {
+        uint32 maxPlayers = mapEntry->MaxPlayers;
+        if (maxPlayers >= MAX_RAID_SIZE)
+            return MAX_RAID_SIZE;
+        if (maxPlayers >= 10)
+            return uint8(maxPlayers);
+    }
+
+    return (dungeon->type == LFG_TYPE_RAID) ? 10u : MAX_GROUP_SIZE;
+}
+
+void GetRaidBotRoleNeeds(uint8 targetSize, uint8& tanks, uint8& offTanks, uint8& heals, uint8& dps)
+{
+    tanks = offTanks = heals = dps = 0;
+    switch (targetSize)
+    {
+        case 40: tanks = 4; offTanks = 4; heals = 10; dps = 22; break;
+        case 25: tanks = 2; offTanks = 2; heals = 5; dps = 14; break;
+        case 10: tanks = 1; offTanks = 1; heals = 2; dps = 5; break;
+        default: tanks = 1; heals = 1; dps = 3; break;
+    }
+}
+
+bool IsRaidDpsClass(uint8 botclass, Player const* leader, bool raidSize)
+{
+    if (raidSize && (botclass == BOT_CLASS_WARRIOR || botclass == BOT_CLASS_PALADIN))
+        return false;
+    return botclass == BOT_CLASS_HUNTER || botclass == BOT_CLASS_ROGUE || botclass == BOT_CLASS_MAGE ||
+        botclass == BOT_CLASS_WARLOCK || botclass == BOT_CLASS_PRIEST || botclass == BOT_CLASS_SHAMAN ||
+        botclass == BOT_CLASS_DRUID ||
+        (botclass == BOT_CLASS_DEATH_KNIGHT && leader && leader->GetLevel() >= 55) ||
+        (!raidSize && (botclass == BOT_CLASS_WARRIOR || botclass == BOT_CLASS_PALADIN));
+}
+}
 
 LFGDungeonData::LFGDungeonData() : id(0), name(), map(0), type(0), expansion(0), group(0), minlevel(),
     maxlevel(), difficulty(REGULAR_DIFFICULTY), seasonal(false), x(0.0f), y(0.0f), z(0.0f), o(0.0f)
@@ -448,7 +495,7 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
     // Check player or group member restrictions
     if (!player->GetSession()->HasPermission(rbac::RBAC_PERM_JOIN_DUNGEON_FINDER))
         joinData.result = LFG_JOIN_NOT_MEET_REQS;
-    else if (player->InBattleground() || player->InArena() || player->InBattlegroundQueue())
+    else     if (player->InBattleground() || player->InArena() || player->InBattlegroundQueue())
         joinData.result = LFG_JOIN_USING_BG_SYSTEM;
     else if (player->HasAura(LFG_SPELL_DUNGEON_DESERTER))
         joinData.result = LFG_JOIN_DESERTER;
@@ -458,9 +505,27 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
         joinData.result = LFG_JOIN_NOT_MEET_REQS;
     else if (player->HasAura(9454)) // check Freeze debuff
         joinData.result = LFG_JOIN_NOT_MEET_REQS;
-    else if (grp)
+
+    //npcbot - stale LFG bots from a previous run must not carry into a new queue
+    if (joinData.result == LFG_JOIN_OK && player->GetBotMgr())
+        player->GetBotMgr()->RemoveLfgServiceBots();
+    //end npcbot
+
+    bool joiningRaid = false;
+    for (uint32 dungeonId : dungeons)
     {
-        if (grp->GetMembersCount() > MAX_GROUP_SIZE)
+        if (GetDungeonType(dungeonId) == LFG_TYPE_RAID)
+        {
+            joiningRaid = true;
+            break;
+        }
+    }
+
+    if (grp)
+    {
+        if (!joiningRaid && grp->GetMembersCount() > MAX_GROUP_SIZE)
+            joinData.result = LFG_JOIN_TOO_MUCH_MEMBERS;
+        else if (joiningRaid && grp->GetMembersCount() > MAX_RAID_SIZE)
             joinData.result = LFG_JOIN_TOO_MUCH_MEMBERS;
         else
         {
@@ -590,26 +655,19 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
 
     if (isRaid)
     {
-        TC_LOG_DEBUG("lfg.join", "{} trying to join raid browser and it's disabled.", guid.ToString());
+        if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotRaidLfgAutoFillEnabled() &&
+            BotCfg::IsNpcBotRaidFinderBotGenerationEnabled() && isOptionEnabled(LFG_OPTION_ENABLE_RAID_BROWSER))
+        {
+            if (grp && (grp->isLFGGroup() || guid != grp->GetLeaderGUID()))
+                return;
+            StartInstantRaidLfg(player, roles, dungeons, comment, grp);
+            return;
+        }
+        TC_LOG_DEBUG("lfg.join", "{} trying to join raid LFG but bot raid fill is disabled.", guid.ToString());
         return;
     }
 
     //npcbot
-    auto try_generate_fake_dungeon_bots = [gguid, isContinue, &dungeons, this](LfgRoleCheck& role_check) {
-        if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled() && role_check.roles.size() < std::size_t(MAX_GROUP_SIZE))
-        {
-            const uint32 fake_entry = BOT_GIVER_ENTRY;
-            ObjectGuid::LowType counter = 1;
-            while (role_check.roles.size() < static_cast<std::size_t>(MAX_GROUP_SIZE))
-            {
-                ObjectGuid fake_guid = ObjectGuid::Create<HighGuid::Unit>(fake_entry, counter++);
-                if (!isContinue)
-                    SetSelectedDungeons(fake_guid, dungeons);
-                role_check.roles.emplace(fake_guid, 0);
-                UpdateRoleCheck(gguid, fake_guid, PLAYER_ROLE_ANY & ~PLAYER_ROLE_LEADER);
-            }
-        }
-    };
     //end npcbot
 
     std::string debugNames = "";
@@ -674,38 +732,9 @@ void LFGMgr::JoinLfg(Player* player, uint8 roles, LfgDungeonSet& dungeons, const
                 //end npcbot
             }
         }
-        //npcbot
-        try_generate_fake_dungeon_bots(roleCheck);
-        //end npcbot
         // Update leader role
         UpdateRoleCheck(gguid, guid, roles);
     }
-    //npcbot
-    else if (BotCfg::IsNpcBotModEnabled() && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled())
-    {
-        LfgRoleCheck& roleCheck = RoleChecksStore[gguid];
-        roleCheck.cancelTime = GameTime::GetGameTime() + LFG_TIME_ROLECHECK;
-        roleCheck.state = LFG_ROLECHECK_INITIALITING;
-        roleCheck.leader = guid;
-        roleCheck.dungeons = dungeons;
-        roleCheck.rDungeonId = rDungeonId;
-        if (rDungeonId)
-        {
-            dungeons.clear();
-            dungeons.insert(rDungeonId);
-        }
-        SetState(gguid, LFG_STATE_ROLECHECK);
-        LfgUpdateData updateData = LfgUpdateData(LFG_UPDATETYPE_JOIN_QUEUE, dungeons, comment);
-        player->GetSession()->SendLfgUpdateParty(updateData);
-        SetState(guid, LFG_STATE_ROLECHECK);
-        if (!isContinue)
-            SetSelectedDungeons(guid, dungeons);
-        roleCheck.roles[guid] = 0;
-        debugNames.append(player->GetName());
-        try_generate_fake_dungeon_bots(roleCheck);
-        UpdateRoleCheck(gguid, guid, roles);
-    }
-    //end npcbot
     else                                                   // Add player to queue
     {
         LfgRolesMap rolesMap;
@@ -814,6 +843,27 @@ void LFGMgr::LeaveLfg(ObjectGuid guid, bool disconnected)
                 SetState(guid, LFG_STATE_NONE);
             break;
     }
+
+    //npcbot - leaving queue/proposal/rolecheck: dismiss leftover LFG service bots
+    if (state == LFG_STATE_QUEUED || state == LFG_STATE_PROPOSAL || state == LFG_STATE_ROLECHECK)
+    {
+        auto dismissForPlayer = [](ObjectGuid playerGuid)
+        {
+            if (Player* player = ObjectAccessor::FindConnectedPlayer(playerGuid))
+                if (player->GetBotMgr())
+                    player->GetBotMgr()->RemoveLfgServiceBots();
+        };
+
+        if (!gguid.IsEmpty())
+        {
+            GuidSet const& players = GetPlayers(gguid);
+            for (ObjectGuid const& playerGuid : players)
+                dismissForPlayer(playerGuid);
+        }
+        else
+            dismissForPlayer(guid);
+    }
+    //end npcbot
 }
 
 /**
@@ -1044,6 +1094,281 @@ bool LFGMgr::CheckGroupRoles(LfgRolesMap& groles)
     return (tank + healer + damage) == uint8(groles.size());
 }
 
+// By leewheel 20260531 - reserve bot slots in LFG proposal (no hire) so client receives valid roles
+void LFGMgr::PopulateProposalBotSlots(LfgProposal& proposal)
+{
+    LFGDungeonData const* dungeon = GetLFGDungeon(proposal.dungeonId);
+    if (!dungeon)
+        return;
+
+    uint8 const targetSize = GetLfgInstanceTargetSize(dungeon);
+    if (proposal.players.size() >= targetSize)
+        return;
+
+    bool const isRaidLfg = dungeon->type == LFG_TYPE_RAID || targetSize > MAX_GROUP_SIZE;
+    bool const botFillEnabled = BotCfg::IsNpcBotModEnabled() && (
+        (isRaidLfg && BotCfg::IsNpcBotRaidFinderBotGenerationEnabled()) ||
+        (!isRaidLfg && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled()));
+    if (!botFillEnabled)
+        return;
+
+    Player* recruitLeader = ObjectAccessor::FindConnectedPlayer(proposal.leader);
+    if (!recruitLeader)
+        return;
+
+    //npcbot - never reserve slots while stale LFG bots are still attached to the leader
+    if (recruitLeader->GetBotMgr())
+        recruitLeader->GetBotMgr()->RemoveLfgServiceBots();
+    //end npcbot
+
+    Group* leaderGroup = recruitLeader->GetGroup();
+    if (leaderGroup && !leaderGroup->IsLeader(recruitLeader->GetGUID()))
+        return;
+
+    uint8 tankCount = 0;
+    uint8 healCount = 0;
+    uint8 dpsCount = 0;
+    std::set<uint8> usedClasses;
+    for (LfgProposalPlayerContainer::value_type const& entry : proposal.players)
+    {
+        switch (entry.second.role & ~PLAYER_ROLE_LEADER)
+        {
+            case PLAYER_ROLE_TANK: ++tankCount; break;
+            case PLAYER_ROLE_HEALER: ++healCount; break;
+            case PLAYER_ROLE_DAMAGE: ++dpsCount; break;
+            default: break;
+        }
+        if (entry.first.IsCreature())
+        {
+            if (Creature const* existing = BotDataMgr::FindBot(entry.first.GetEntry()))
+                usedClasses.insert(existing->GetBotClass());
+        }
+        else if (Player* plr = ObjectAccessor::FindConnectedPlayer(entry.first))
+            usedClasses.insert(plr->GetClass());
+    }
+
+    uint8 botsNeeded = targetSize - uint8(proposal.players.size());
+    bool const uniqueClassPerRole = targetSize < 10;
+    bool const raidSize = targetSize >= 10;
+
+    uint8 tanksToRecruit = 0;
+    uint8 offTanksToRecruit = 0;
+    uint8 healersToRecruit = 0;
+    uint8 dpsToRecruit = 0;
+
+    if (isRaidLfg)
+        GetRaidBotRoleNeeds(targetSize, tanksToRecruit, offTanksToRecruit, healersToRecruit, dpsToRecruit);
+    else
+    {
+        tanksToRecruit = (tankCount == 0 && !BotMgr::PlayerIsMainTank(recruitLeader)) ? 1 : 0;
+        healersToRecruit = (healCount == 0 && !BotMgr::PlayerIsHealer(recruitLeader)) ? 1 : 0;
+        dpsToRecruit = dpsCount < 3 ? uint8(3 - dpsCount) : 0;
+    }
+
+    if (tankCount >= tanksToRecruit)
+        tanksToRecruit = 0;
+    else
+        tanksToRecruit -= tankCount;
+
+    if (healCount >= healersToRecruit)
+        healersToRecruit = 0;
+    else
+        healersToRecruit -= healCount;
+
+    if (dpsCount >= dpsToRecruit)
+        dpsToRecruit = 0;
+    else
+        dpsToRecruit -= dpsCount;
+
+    if (recruitLeader->GetBotMgr())
+        BotMgr::CountBotsTowardPartyRoles(recruitLeader->GetBotMgr()->GetBotMap(), tanksToRecruit, healersToRecruit, dpsToRecruit, &botsNeeded);
+
+    NpcBotRegistry allBots = BotDataMgr::GetExistingNPCBots();
+
+    auto tryReserveBot = [&](Creature const* bot, uint8 lfgRole) -> bool
+    {
+        if (!bot || botsNeeded == 0)
+            return false;
+
+        if (proposal.players.count(bot->GetGUID()))
+            return false;
+
+        LfgProposalPlayer playerproposal;
+        playerproposal.role = lfgRole;
+        playerproposal.accept = LFG_ANSWER_PENDING;
+        proposal.players[bot->GetGUID()] = playerproposal;
+
+        usedClasses.insert(bot->GetBotClass());
+        allBots.erase(bot);
+        --botsNeeded;
+        return true;
+    };
+
+    auto isTankClass = [&](uint8 botclass) {
+        return botclass == BOT_CLASS_WARRIOR || botclass == BOT_CLASS_PALADIN ||
+            (botclass == BOT_CLASS_DEATH_KNIGHT && recruitLeader->GetLevel() >= 55) ||
+            botclass == BOT_CLASS_DRUID;
+    };
+    auto isHealClass = [&](uint8 botclass) {
+        return botclass == BOT_CLASS_PALADIN || botclass == BOT_CLASS_PRIEST ||
+            botclass == BOT_CLASS_SHAMAN || botclass == BOT_CLASS_DRUID;
+    };
+
+    while (botsNeeded > 0 && !allBots.empty())
+    {
+        auto pick = allBots.begin();
+        std::advance(pick, urand(0, uint32(allBots.size() - 1)));
+        Creature const* bot = *pick;
+
+        if (!bot || bot->IsWandererBot() || !bot->GetBotAI() || !bot->GetBotAI()->IAmFree())
+        {
+            allBots.erase(bot);
+            continue;
+        }
+
+        if (BotCfg::FilterRaces())
+        {
+            NpcBotExtras const* extras = BotDataMgr::SelectNpcBotExtras(bot->GetEntry());
+            if (extras && extras->bclass < BOT_CLASS_EX_START)
+            {
+                uint32 const botFaction = BotDataMgr::GetDefaultFactionForBotRaceClass(extras->bclass, extras->race);
+                if (BotDataMgr::GetTeamForFaction(botFaction) != recruitLeader->GetTeam())
+                {
+                    allBots.erase(bot);
+                    continue;
+                }
+            }
+        }
+
+        if (BotDataMgr::GetMinLevelForBotClass(bot->GetBotClass()) > recruitLeader->GetLevel())
+        {
+            allBots.erase(bot);
+            continue;
+        }
+
+        uint8 const botclass = bot->GetBotClass();
+        if (uniqueClassPerRole && usedClasses.count(botclass))
+        {
+            allBots.erase(bot);
+            continue;
+        }
+
+        bool reserved = false;
+        if (tanksToRecruit > 0 && isTankClass(botclass))
+        {
+            reserved = tryReserveBot(bot, PLAYER_ROLE_TANK);
+            if (reserved)
+                --tanksToRecruit;
+        }
+        else if (!reserved && offTanksToRecruit > 0 && isTankClass(botclass))
+        {
+            reserved = tryReserveBot(bot, PLAYER_ROLE_TANK);
+            if (reserved)
+                --offTanksToRecruit;
+        }
+        else if (!reserved && healersToRecruit > 0 && isHealClass(botclass))
+        {
+            reserved = tryReserveBot(bot, PLAYER_ROLE_HEALER);
+            if (reserved)
+                --healersToRecruit;
+        }
+        else if (!reserved && dpsToRecruit > 0 && IsRaidDpsClass(botclass, recruitLeader, raidSize))
+        {
+            reserved = tryReserveBot(bot, PLAYER_ROLE_DAMAGE);
+            if (reserved)
+                --dpsToRecruit;
+        }
+        else if (!reserved && botsNeeded > 0)
+        {
+            reserved = tryReserveBot(bot, PLAYER_ROLE_DAMAGE);
+            if (reserved && dpsToRecruit > 0)
+                --dpsToRecruit;
+        }
+
+        if (!reserved)
+            allBots.erase(bot);
+    }
+
+    if (botsNeeded > 0)
+        TC_LOG_WARN("lfg", "PopulateProposalBotSlots: could not reserve {} bot slots for proposal {}", botsNeeded, proposal.id);
+}
+
+// By leewheel 20260531 - hire bots reserved in proposal after LFG group is ready (defer AddBotToGroup to MakeNewGroup)
+void LFGMgr::HireBotsFromProposal(LfgProposal& proposal)
+{
+    LFGDungeonData const* dungeon = GetLFGDungeon(proposal.dungeonId);
+    if (!dungeon)
+        return;
+
+    uint8 const targetSize = GetLfgInstanceTargetSize(dungeon);
+    bool const isRaidLfg = dungeon->type == LFG_TYPE_RAID || targetSize > MAX_GROUP_SIZE;
+    bool const botFillEnabled = BotCfg::IsNpcBotModEnabled() && (
+        (isRaidLfg && BotCfg::IsNpcBotRaidFinderBotGenerationEnabled()) ||
+        (!isRaidLfg && BotCfg::IsNpcBotDungeonFinderBotGenerationEnabled()));
+    if (!botFillEnabled)
+        return;
+
+    Player* recruitLeader = ObjectAccessor::FindConnectedPlayer(proposal.leader);
+    if (!recruitLeader || !recruitLeader->GetBotMgr())
+        return;
+
+    BotMgr* mgr = recruitLeader->GetBotMgr();
+
+    auto hireReservedBot = [&](ObjectGuid const& guid, LfgProposalPlayer const& pp) -> bool
+    {
+        if (guid.IsPlayer())
+            return true;
+
+        if (mgr->GetBot(guid))
+            return true;
+
+        Creature* bot = const_cast<Creature*>(BotDataMgr::FindBot(guid.GetEntry()));
+        if (!bot || !bot->GetBotAI() || !bot->GetBotAI()->IAmFree())
+            return false;
+
+        uint8 const lfgRole = pp.role & ~PLAYER_ROLE_LEADER;
+        uint32 botRole = BOT_ROLE_DPS;
+        if (lfgRole == PLAYER_ROLE_TANK)
+            botRole = BOT_ROLE_TANK;
+        else if (lfgRole == PLAYER_ROLE_HEALER)
+            botRole = BOT_ROLE_HEAL;
+
+        if (mgr->AddBotEx(bot, false, false) != BOT_ADD_SUCCESS)
+            return false;
+
+        BotDataMgr::SetNpcBotHireSource(bot->GetEntry(), NPCBOT_HIRE_LFG);
+        BotMgr::SetRandomBotTalentsForGroup(bot, botRole);
+        bot->GetBotAI()->ApplyServiceRandomEquip();
+        RegisterDungeonFinderBot(bot);
+        return true;
+    };
+
+    GuidList staleSlots;
+    for (LfgProposalPlayerContainer::value_type const& entry : proposal.players)
+    {
+        if (entry.first.IsPlayer())
+            continue;
+
+        if (!hireReservedBot(entry.first, entry.second))
+            staleSlots.push_back(entry.first);
+    }
+
+    for (ObjectGuid const& guid : staleSlots)
+        proposal.players.erase(guid);
+
+    if (proposal.players.size() < targetSize)
+        PopulateProposalBotSlots(proposal);
+
+    for (LfgProposalPlayerContainer::value_type const& entry : proposal.players)
+    {
+        if (entry.first.IsPlayer())
+            continue;
+
+        if (!mgr->GetBot(entry.first))
+            hireReservedBot(entry.first, entry.second);
+    }
+}
+
 /**
    Makes a new group given a proposal
    @param[in]     proposal Proposal to get info from
@@ -1052,8 +1377,17 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
 {
     GuidList players, tankPlayers, healPlayers, dpsPlayers;
     GuidList playersToTeleport;
+    LfgProposal proposalmod = proposal;
 
-    for (LfgProposalPlayerContainer::const_iterator it = proposal.players.begin(); it != proposal.players.end(); ++it)
+    //npcbot - clear leftover LFG bots before hiring/adding to the new LFG group
+    if (Player* leader = ObjectAccessor::FindConnectedPlayer(proposal.leader))
+        if (leader->GetBotMgr())
+            leader->GetBotMgr()->RemoveLfgServiceBots();
+    //end npcbot
+
+    HireBotsFromProposal(proposalmod);
+
+    for (LfgProposalPlayerContainer::const_iterator it = proposalmod.players.begin(); it != proposalmod.players.end(); ++it)
     {
         ObjectGuid guid = it->first;
         if (guid == proposal.leader)
@@ -1071,7 +1405,7 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
                     dpsPlayers.push_back(guid);
                     break;
                 default:
-                    ABORT_MSG("Invalid LFG role %u", it->second.role);
+                    dpsPlayers.push_back(guid);
                     break;
             }
 
@@ -1079,15 +1413,18 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
             playersToTeleport.push_back(guid);
     }
 
-    players.splice(players.end(), tankPlayers);
-    players.splice(players.end(), healPlayers);
-    players.splice(players.end(), dpsPlayers);
-
     // Set the dungeon difficulty
     LFGDungeonData const* dungeon = GetLFGDungeon(proposal.dungeonId);
     ASSERT(dungeon);
 
     Group* grp = !proposal.group.IsEmpty() ? sGroupMgr->GetGroupByGUID(proposal.group) : nullptr;
+
+    uint8 const targetSize = GetLfgInstanceTargetSize(dungeon);
+
+    players.splice(players.end(), tankPlayers);
+    players.splice(players.end(), healPlayers);
+    players.splice(players.end(), dpsPlayers);
+
     for (GuidList::const_iterator it = players.begin(); it != players.end(); ++it)
     {
         ObjectGuid pguid = (*it);
@@ -1100,7 +1437,20 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
         {
             Group* group = player->GetGroup();
             if (group && group != grp)
+            {
+                BotMgr* botMgr = player->GetBotMgr();
+                if (botMgr)
+                {
+                    GuidVector botGuids;
+                    botGuids.reserve(botMgr->GetBotMap()->size());
+                    for (auto const& [bguid, bot] : *botMgr->GetBotMap())
+                        botGuids.push_back(bguid);
+                    for (ObjectGuid bguid : botGuids)
+                        if (Creature* bot = botMgr->GetBot(bguid))
+                            botMgr->RemoveBotFromGroup(bot);
+                }
                 Player::RemoveFromGroup(group, pguid);
+            }
 
             if (!grp)
             {
@@ -1114,7 +1464,7 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
             else if (group != grp)
                 grp->AddMember(player);
 
-            grp->SetLfgRoles(pguid, proposal.players.find(pguid)->second.role);
+            grp->SetLfgRoles(pguid, proposalmod.players.find(pguid)->second.role);
 
             // Add the cooldown spell if queued for a random dungeon
             const LfgDungeonSet& dungeons = GetSelectedDungeons(player->GetGUID());
@@ -1126,15 +1476,15 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
                     player->CastSpell(player, LFG_SPELL_DUNGEON_COOLDOWN, false);
             }
 
-            for (ObjectGuid bguid : players)
+            for (GuidList::const_iterator itr2 = players.begin(); itr2 != players.end(); ++itr2)
             {
-                if (bguid.IsCreature())
+                ObjectGuid bguid = (*itr2);
+                if (bguid.IsPlayer())
+                    continue;
+                if (Creature* bot = player->GetBotMgr()->GetBot(bguid))
                 {
-                    if (Creature* bot = player->GetBotMgr()->GetBot(bguid))
-                    {
-                        player->GetBotMgr()->AddBotToGroup(bot);
-                        grp->SetLfgRoles(bguid, proposal.players.find(bguid)->second.role);
-                    }
+                    player->GetBotMgr()->AddBotToGroup(bot);
+                    grp->SetLfgRoles(bguid, proposalmod.players.find(bguid)->second.role);
                 }
             }
 
@@ -1158,7 +1508,7 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
         else if (group != grp)
             grp->AddMember(player);
 
-        grp->SetLfgRoles(pguid, proposal.players.find(pguid)->second.role);
+        grp->SetLfgRoles(pguid, proposalmod.players.find(pguid)->second.role);
 
         // Add the cooldown spell if queued for a random dungeon
         const LfgDungeonSet& dungeons = GetSelectedDungeons(player->GetGUID());
@@ -1172,6 +1522,9 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
     }
 
     ASSERT(grp);
+    if (targetSize > MAX_GROUP_SIZE && !grp->isRaidGroup())
+        grp->ConvertToRaid();
+
     grp->SetDungeonDifficulty(Difficulty(dungeon->difficulty));
     ObjectGuid gguid = grp->GetGUID();
     SetDungeon(gguid, dungeon->Entry());
@@ -1190,6 +1543,7 @@ void LFGMgr::MakeNewGroup(LfgProposal const& proposal)
 
 uint32 LFGMgr::AddProposal(LfgProposal& proposal)
 {
+    PopulateProposalBotSlots(proposal);
     proposal.id = ++m_lfgProposalId;
     ProposalsStore[m_lfgProposalId] = proposal;
     return m_lfgProposalId;
@@ -1216,28 +1570,14 @@ void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
     if (itProposalPlayer == proposal.players.end())
         return;
 
-    //npcbot
-    // By leewheel 20260528 - on accept: auto-agree BOT_GIVER queue fillers (even without hired bots)
-    // and mirror accept for player's bots already in the proposal
+    //npcbot - player accepted proposal; make LFG bots accept too
     if (accept && guid.IsPlayer())
     {
-        if (Player* player = ObjectAccessor::FindConnectedPlayer(guid))
+        for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
         {
-            for (LfgProposalPlayerContainer::iterator itPlayers = proposal.players.begin(); itPlayers != proposal.players.end(); ++itPlayers)
-            {
-                ObjectGuid bguid = itPlayers->first;
-                if (bguid.IsPlayer())
-                    continue;
-
-                if (bguid.GetEntry() == BOT_GIVER_ENTRY)
-                {
-                    itPlayers->second.accept = LFG_ANSWER_AGREE;
-                    continue;
-                }
-
-                if (player->HaveBot() && player->GetBotMgr()->GetBot(bguid))
-                    itPlayers->second.accept = LfgAnswer(accept);
-            }
+            if (itPlayers->first.IsPlayer())
+                continue;
+            itPlayers->second.accept = LfgAnswer(accept);
         }
     }
     //end npcbot
@@ -1328,6 +1668,54 @@ void LFGMgr::UpdateProposal(uint32 proposalId, ObjectGuid guid, bool accept)
 
     MakeNewGroup(proposal);
     ProposalsStore.erase(itProposal);
+}
+
+void LFGMgr::StartInstantRaidLfg(Player* player, uint8 roles, LfgDungeonSet const& dungeons, std::string const& comment, Group* grp)
+{
+    if (!player || dungeons.empty())
+        return;
+
+    ObjectGuid const guid = player->GetGUID();
+    ObjectGuid const gguid = grp ? grp->GetGUID() : guid;
+
+    LfgDungeonSet chosen;
+    uint32 const dungeonId = Trinity::Containers::SelectRandomContainerElement(dungeons);
+    chosen.insert(dungeonId);
+
+    SetComment(guid, comment);
+    SetSelectedDungeons(gguid, chosen);
+    SetRoles(gguid, roles);
+    SetState(gguid, LFG_STATE_QUEUED);
+
+    LfgUpdateData queued(LFG_UPDATETYPE_ADDED_TO_QUEUE, chosen, comment);
+    if (grp)
+    {
+        for (GroupReference* itr = grp->GetFirstMember(); itr != nullptr; itr = itr->next())
+            if (Player* plrg = itr->GetSource())
+                SendLfgUpdateParty(plrg->GetGUID(), queued);
+    }
+    else
+        SendLfgUpdatePlayer(guid, queued);
+
+    LfgProposal proposal;
+    proposal.cancelTime = GameTime::GetGameTime() + LFG_TIME_PROPOSAL;
+    proposal.state = LFG_PROPOSAL_INITIATING;
+    proposal.leader = guid;
+    proposal.dungeonId = dungeonId;
+    proposal.isNew = true;
+    if (grp)
+        proposal.group = grp->GetGUID();
+
+    LfgProposalPlayer pp;
+    pp.role = roles;
+    if (!grp || grp->IsLeader(guid))
+        pp.role |= PLAYER_ROLE_LEADER;
+    pp.accept = LFG_ANSWER_PENDING;
+    proposal.players[guid] = pp;
+
+    uint32 const proposalId = AddProposal(proposal);
+    SendLfgUpdateProposal(guid, ProposalsStore[proposalId]);
+    UpdateProposal(proposalId, guid, true);
 }
 
 /**

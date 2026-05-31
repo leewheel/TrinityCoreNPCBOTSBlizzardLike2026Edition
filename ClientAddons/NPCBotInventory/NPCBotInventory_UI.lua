@@ -107,11 +107,12 @@ MainFrame:HookScript("OnHide", function()
     end
 end)
 
--- 主窗口左上角标题：显示当前选中机器人名字（与经典对话框标题位置一致）
+-- 主窗口左上角保留空白（插件名由对话框边框显示）
 MainFrame.title = MainFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
 MainFrame.title:SetPoint("TOPLEFT", 22, -14)
 MainFrame.title:SetJustifyH("LEFT")
 MainFrame.title:SetText("")
+MainFrame.title:Hide()
 
 local closeBtn = CreateFrame("Button", nil, MainFrame, "UIPanelCloseButton")
 closeBtn:SetPoint("TOPRIGHT", -5, -5)
@@ -711,16 +712,7 @@ GearContainer:SetBackdrop({
 })
 GearContainer:SetBackdropColor(0.15, 0.15, 0.15, 0.95)
 
-local GEAR_HEADER_HEIGHT = 4
-
-function UpdateMainFrameTitle(data)
-    if not data or not data.name or data.name == "" then
-        MainFrame.title:SetText("")
-        return
-    end
-    local cColor = classColors[data.className] or "FFFFFF"
-    MainFrame.title:SetText("|cff" .. cColor .. data.name .. "|r")
-end
+local GEAR_HEADER_HEIGHT = 28
 
 -- [[ BOT STATS PANEL ]] --
 StatsPanel = CreateFrame("Frame", "BotStatsPanel", UIParent)
@@ -961,6 +953,55 @@ function GetBotTalentLabel(botData)
     local spec = tonumber(botData and botData.spec) or 0
     local specInfo = BotSpecInfo[spec] or BotSpecInfo[31]
     return specInfo.specName or "默认"
+end
+
+local RaceNamesZh = {
+    [1] = "人类", [2] = "兽人", [3] = "矮人", [4] = "暗夜精灵", [5] = "亡灵",
+    [6] = "牛头人", [7] = "侏儒", [8] = "巨魔", [10] = "血精灵", [11] = "德莱尼",
+}
+
+local ClassNamesZh = {
+    ["Warrior"] = "战士", ["Paladin"] = "圣骑士", ["Hunter"] = "猎人",
+    ["Rogue"] = "潜行者", ["Priest"] = "牧师", ["Death Knight"] = "死亡骑士",
+    ["Shaman"] = "萨满", ["Mage"] = "法师", ["Warlock"] = "术士", ["Druid"] = "德鲁伊",
+    ["Blademaster"] = "剑圣", ["Sphynx"] = "斯芬克斯", ["Archmage"] = "大法师",
+    ["Dreadlord"] = "恐惧魔王", ["Spellbreaker"] = "破法者", ["Dark Ranger"] = "黑暗游侠",
+    ["Necromancer"] = "死灵法师", ["Sea Witch"] = "海女巫", ["Crypt Lord"] = "地穴领主",
+}
+
+local GenderNamesZh = { [0] = "男", [1] = "女" }
+
+local function GetBotRaceLabel(raceId)
+    return RaceNamesZh[tonumber(raceId) or 0] or "未知种族"
+end
+
+local function GetBotClassLabel(className)
+    return ClassNamesZh[className] or className or "未知"
+end
+
+function GetBotIdentityText(data)
+    if not data then return "" end
+    local raceLabel = GetBotRaceLabel(data.race)
+    local genderLabel = GenderNamesZh[tonumber(data.gender) or 0]
+    local classLabel = GetBotClassLabel(data.className)
+    local talentLabel = GetBotTalentLabel(data)
+    local roleLabel = GetBotRolesLabel(data.roles)
+    if genderLabel then
+        return string.format("种族：%s(%s)  职业：%s  天赋：%s  职责：%s", raceLabel, genderLabel, classLabel, talentLabel, roleLabel)
+    end
+    return string.format("种族：%s  职业：%s  天赋：%s  职责：%s", raceLabel, classLabel, talentLabel, roleLabel)
+end
+
+function GetBotIdentityInlineText(data)
+    if not data then return "" end
+    local raceLabel = GetBotRaceLabel(data.race)
+    local genderLabel = GenderNamesZh[tonumber(data.gender) or 0]
+    local classLabel = GetBotClassLabel(data.className)
+    local talentLabel = GetBotTalentLabel(data)
+    if genderLabel then
+        return string.format("种族：%s(%s)  职业：%s  天赋：%s", raceLabel, genderLabel, classLabel, talentLabel)
+    end
+    return string.format("种族：%s  职业：%s  天赋：%s", raceLabel, classLabel, talentLabel)
 end
 
 local function BotStatsIsTank(ctx)
@@ -1306,7 +1347,7 @@ UpdateStatsPanel = function(entry)
         local ctx = GetBotStatsContext(data)
         StatsPanel:Show()
         statsTitle:SetText(data.name or "机器人属性")
-        statsContextText:SetText(ctx.specName .. " " .. ctx.className .. " - " .. ctx.roleLabel)
+        statsContextText:SetText(GetBotIdentityInlineText and GetBotIdentityInlineText(data) or "")
         statsStatusText:SetText(data.stats and "换装后会刷新最新属性" or "等待服务器发送属性数据")
 
         local stats = data.stats or {}
@@ -1327,10 +1368,10 @@ end
 
 
 -- [[ 3D MODEL VIEWER & SMART DROP ZONE ]] --
--- Uses WotLK 3.3.5a DressUpModel for creature display + item drop zone
--- The model sits in the center between left/right slot columns
+-- PlayerModel + SetUnit(跟随 bot)：3.3.5 下带贴图且种族/装备与游戏内一致。
+-- DressUpModel 对 NPC 会白模；SetModel+TryOn 身体无贴图。
 
-local BotModel = CreateFrame("DressUpModel", "BotManager3DModel", GearContainer)
+local BotModel = CreateFrame("PlayerModel", "BotManager3DModel", GearContainer)
 BotModel:SetPoint("TOPLEFT", 60, -(GEAR_HEADER_HEIGHT + 8))
 BotModel:SetPoint("BOTTOMRIGHT", -60, 55)
 BotModel:EnableMouse(true)
@@ -1346,6 +1387,36 @@ BotModel:SetBackdrop({
 })
 BotModel:SetBackdropColor(0.05, 0.05, 0.08, 0.95)
 BotModel:SetBackdropBorderColor(0.4, 0.4, 0.4, 0.8)
+
+-- 装备区标题（置于模型框之上，避免被 3D 视口遮挡）
+local GearTitleBar = CreateFrame("Frame", nil, GearContainer)
+GearTitleBar:SetPoint("TOPLEFT", GearContainer, "TOPLEFT", 52, -6)
+GearTitleBar:SetPoint("TOPRIGHT", GearContainer, "TOPRIGHT", -52, -6)
+GearTitleBar:SetHeight(22)
+GearTitleBar:SetFrameLevel(BotModel:GetFrameLevel() + 5)
+
+GearContainer.title = GearTitleBar:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+GearContainer.title:SetPoint("TOPLEFT", GearTitleBar, "TOPLEFT", 0, 0)
+GearContainer.title:SetPoint("TOPRIGHT", GearTitleBar, "TOPRIGHT", 0, 0)
+GearContainer.title:SetHeight(20)
+GearContainer.title:SetJustifyH("CENTER")
+GearContainer.title:SetWordWrap(false)
+GearContainer.title:SetText("")
+
+function UpdateMainFrameTitle(data)
+    if not GearContainer or not GearContainer.title then return end
+    if not data or not data.name or data.name == "" then
+        GearContainer.title:SetText("")
+        return
+    end
+    local cColor = classColors[data.className] or "FFFFFF"
+    local identity = GetBotIdentityInlineText and GetBotIdentityInlineText(data) or ""
+    if identity ~= "" then
+        GearContainer.title:SetText("|cff" .. cColor .. data.name .. "|r |cffC0C0C0" .. identity .. "|r")
+    else
+        GearContainer.title:SetText("|cff" .. cColor .. data.name .. "|r")
+    end
+end
 
 -- Left/Right Navigation Arrows
 local PrevBotBtn = CreateFrame("Button", nil, BotModel, "SecureActionButtonTemplate")
@@ -1417,7 +1488,9 @@ HideHelmetBtn:SetScript("OnClick", function()
         BotModel.panY = savedPanY or 0
         BotModel.rotation = savedRotation or 0
         ApplyBotModelTransform(BotModel)
-        BotModel:SetRotation(BotModel.rotation)
+        if BotModel.SetRotation then
+            BotModel:SetRotation(BotModel.rotation)
+        end
     end
 end)
 
@@ -1475,6 +1548,31 @@ local RaceGenderPlayerDisplayId = {
     [21] = { [0] = 15475, [1] = 15476 }, -- DH Horde (Blood Elf)
 }
 
+-- 3.3.5 DressUpModel 可用 SetModel 加载玩家种族 mesh（SetDisplayID 不可用，SetUnit(NPC) 会白模）
+local RaceGenderModelPath = {
+    [1]  = { [0] = "Character\\Human\\Male\\HumanMale.m2",       [1] = "Character\\Human\\Female\\HumanFemale.m2" },
+    [2]  = { [0] = "Character\\Orc\\Male\\OrcMale.m2",           [1] = "Character\\Orc\\Female\\OrcFemale.m2" },
+    [3]  = { [0] = "Character\\Dwarf\\Male\\DwarfMale.m2",       [1] = "Character\\Dwarf\\Female\\DwarfFemale.m2" },
+    [4]  = { [0] = "Character\\NightElf\\Male\\NightElfMale.m2", [1] = "Character\\NightElf\\Female\\NightElfFemale.m2" },
+    [5]  = { [0] = "Character\\Scourge\\Male\\ScourgeMale.m2",   [1] = "Character\\Scourge\\Female\\ScourgeFemale.m2" },
+    [6]  = { [0] = "Character\\Tauren\\Male\\TaurenMale.m2",     [1] = "Character\\Tauren\\Female\\TaurenFemale.m2" },
+    [7]  = { [0] = "Character\\Gnome\\Male\\GnomeMale.m2",       [1] = "Character\\Gnome\\Female\\GnomeFemale.m2" },
+    [8]  = { [0] = "Character\\Troll\\Male\\TrollMale.m2",       [1] = "Character\\Troll\\Female\\TrollFemale.m2" },
+    [9]  = { [0] = "Character\\Gnome\\Male\\GnomeMale.m2",       [1] = "Character\\Gnome\\Female\\GnomeFemale.m2" },
+    [10] = { [0] = "Character\\BloodElf\\Male\\BloodElfMale.m2", [1] = "Character\\BloodElf\\Female\\BloodElfFemale.m2" },
+    [11] = { [0] = "Character\\Draenei\\Male\\DraeneiMale.m2",   [1] = "Character\\Draenei\\Female\\DraeneiFemale.m2" },
+    [12] = { [0] = "Character\\BloodElf\\Male\\BloodElfMale.m2", [1] = "Character\\BloodElf\\Female\\BloodElfFemale.m2" },
+    [13] = { [0] = "Character\\Gnome\\Male\\GnomeMale.m2",       [1] = "Character\\Gnome\\Female\\GnomeFemale.m2" },
+    [14] = { [0] = "Character\\BloodElf\\Male\\BloodElfMale.m2", [1] = "Character\\BloodElf\\Female\\BloodElfFemale.m2" },
+    [15] = { [0] = "Character\\Dwarf\\Male\\DwarfMale.m2",       [1] = "Character\\Dwarf\\Female\\DwarfFemale.m2" },
+    [16] = { [0] = "Character\\Human\\Male\\HumanMale.m2",       [1] = "Character\\Human\\Female\\HumanFemale.m2" },
+    [17] = { [0] = "Character\\Draenei\\Male\\DraeneiMale.m2",   [1] = "Character\\Draenei\\Female\\DraeneiFemale.m2" },
+    [18] = { [0] = "Character\\Troll\\Male\\TrollMale.m2",       [1] = "Character\\Troll\\Female\\TrollFemale.m2" },
+    [19] = { [0] = "Character\\Draenei\\Male\\DraeneiMale.m2",   [1] = "Character\\Draenei\\Female\\DraeneiFemale.m2" },
+    [20] = { [0] = "Character\\NightElf\\Male\\NightElfMale.m2", [1] = "Character\\NightElf\\Female\\NightElfFemale.m2" },
+    [21] = { [0] = "Character\\BloodElf\\Male\\BloodElfMale.m2", [1] = "Character\\BloodElf\\Female\\BloodElfFemale.m2" },
+}
+
 
 local function SetModelDisplay(displayId)
     local ok = pcall(function() BotModel:SetDisplayID(displayId) end)
@@ -1482,6 +1580,58 @@ local function SetModelDisplay(displayId)
         ok = pcall(function() BotModel:SetDisplayInfo(displayId) end)
     end
     return ok
+end
+
+local function ClearBotModel()
+    if BotModel.ClearModel then
+        pcall(function() BotModel:ClearModel() end)
+    end
+end
+
+local function SetBotModelUnit(unit)
+    ClearBotModel()
+    local ok = pcall(function() BotModel:SetUnit(unit) end)
+    return ok
+end
+
+local function SetBotModelFromRace(race, gender)
+    ClearBotModel()
+    local paths = RaceGenderModelPath[race]
+    if not paths then
+        return false
+    end
+    local path = paths[gender] or paths[0]
+    if not path then
+        return false
+    end
+    return pcall(function() BotModel:SetModel(path) end)
+end
+
+local function ApplyGearTryOnToModel(data)
+    if not data or not data.gear then return end
+    pcall(function() BotModel:Undress() end)
+    pcall(function() BotModel:UndressSlot(16) end)
+    pcall(function() BotModel:UndressSlot(17) end)
+    pcall(function() BotModel:UndressSlot(18) end)
+    for slotKey, gearData in pairs(data.gear) do
+        if gearData and gearData.id and gearData.id > 0 then
+            if slotKey == "HEAD" and db.hideHelmet then
+                -- skip
+            else
+                local showItem = true
+                if slotKey == "RANGED" then
+                    local isArcher = (data.className == "Hunter" or data.className == "Dark Ranger" or data.className == "Sea Witch")
+                    if not isArcher then
+                        showItem = false
+                    end
+                end
+                if showItem then
+                    local itemLink = BuildGearItemLink(gearData) or ("item:" .. gearData.id .. ":0:0:0:0:0:0:0")
+                    pcall(function() BotModel:TryOn(itemLink) end)
+                end
+            end
+        end
+    end
 end
 
 local function SafeSetAttribute(button, name, value)
@@ -1553,68 +1703,69 @@ local function FindUnitIdByName(name)
     return nil
 end
 
+local function GetBotCreatureEntryFromUnit(unit)
+    local guid = UnitGUID(unit)
+    if not guid then return nil end
+    local unitType, _, _, _, _, id = strsplit("-", guid)
+    if unitType ~= "Creature" then return nil end
+    return tonumber(id)
+end
+
+local function FindLiveBotUnit(entry, name)
+    if entry then
+        for i = 1, 4 do
+            local unit = "party" .. i
+            if UnitExists(unit) and GetBotCreatureEntryFromUnit(unit) == entry then
+                return unit
+            end
+        end
+        for i = 1, 40 do
+            local unit = "raid" .. i
+            if UnitExists(unit) and GetBotCreatureEntryFromUnit(unit) == entry then
+                return unit
+            end
+        end
+        if UnitExists("target") and GetBotCreatureEntryFromUnit("target") == entry then
+            return "target"
+        end
+    end
+    return FindUnitIdByName(name)
+end
+
 UpdateBotModel = function(entry)
     if not entry then return end
     local data = db[entry]
     if not data then return end
     
-    BotModel.rotation = 0
+    BotModel.rotation = 0.35
     BotModel.zoom = 0
     BotModel.panX = 0
-    BotModel.panY = 0
+    BotModel.panY = 0.05
     
+    local unit = FindLiveBotUnit(entry, data.name)
     local success = false
-    local name = data.name
-    
-    local race = data.race or 1
-    local gender = data.gender or 0
-    
-    -- Retrieve 100% TryOn-compatible player display ID
-    local displayId = 49 -- Default fallback (Human Male)
-    if RaceGenderPlayerDisplayId[race] then
-        displayId = RaceGenderPlayerDisplayId[race][gender] or RaceGenderPlayerDisplayId[race][0] or 49
+
+    if unit then
+        success = SetBotModelUnit(unit)
     end
-    
-    -- Load base player model to guarantee full visual equipment rendering and prevent white textures
-    success = SetModelDisplay(displayId)
-    
-    -- Final fallback: use player unit
+    if not success and UnitExists("target") and GetBotCreatureEntryFromUnit("target") == entry then
+        success = SetBotModelUnit("target")
+    end
     if not success then
-        success = pcall(function() BotModel:SetUnit("player") end)
+        success = SetBotModelUnit("player")
+    end
+
+    if success and unit then
+        BotModel.refreshUnit = unit
+        BotModel.refreshUntil = GetTime() + 0.35
+    else
+        BotModel.refreshUnit = nil
     end
     
-    -- Now dress the model if loading succeeded.
-    if success then
-        pcall(function() BotModel:Undress() end)
-        pcall(function() BotModel:UndressSlot(16) end) -- Main hand
-        pcall(function() BotModel:UndressSlot(17) end) -- Off hand
-        pcall(function() BotModel:UndressSlot(18) end) -- Ranged / bow / relic
-        if data.gear then
-            for slotKey, gearData in pairs(data.gear) do
-                if gearData and gearData.id and gearData.id > 0 then
-                    -- Skip helmet if hidden
-                    if slotKey == "HEAD" and db.hideHelmet then
-                        -- Do not TryOn the helmet
-                    else
-                        -- Check if we should show this item (only archers should show ranged weapon in viewer)
-                        local showItem = true
-                        if slotKey == "RANGED" then
-                            local isArcher = (data.className == "Hunter" or data.className == "Dark Ranger" or data.className == "Sea Witch")
-                            if not isArcher then
-                                showItem = false
-                            end
-                        end
-                        if showItem then
-                            local itemLink = BuildGearItemLink(gearData) or ("item:" .. gearData.id .. ":0:0:0:0:0:0:0")
-                            pcall(function() BotModel:TryOn(itemLink) end)
-                        end
-                    end
-                end
-            end
-        end
+    BotModel:SetFacing(0.35)
+    if BotModel.SetRotation then
+        BotModel:SetRotation(BotModel.rotation)
     end
-    
-    BotModel:SetFacing(0)
     ApplyBotModelTransform(BotModel)
     
     UpdateMainFrameTitle(data)
@@ -2217,6 +2368,9 @@ local CAMERA_DISTANCE_BASE = 1.0
 local CAMERA_DISTANCE_PER_ZOOM = 0.18
 local CAMERA_DISTANCE_MIN = 0.45
 local CAMERA_DISTANCE_MAX = 1.6
+-- PlayerModel SetUnit：depth 负值=拉远，正值=拉近（过近会只剩一张脸）
+local MODEL_VIEW_Z_BASE = -1.35
+local MODEL_VIEW_Z_STEP = 0.22
 
 local function ClampValue(value, minValue, maxValue)
     if value < minValue then return minValue end
@@ -2229,18 +2383,15 @@ ApplyBotModelTransform = function(model)
     local zoom = model.zoom or 0
     local panX = model.panX or 0
     local panY = model.panY or 0
-    local usedCameraDistance = false
+
+    -- PlayerModel + SetUnit：用 SetPosition 控制远近（3.3.5 最可靠）
+    local depth = MODEL_VIEW_Z_BASE - (zoom * MODEL_VIEW_Z_STEP)
+    pcall(model.SetPosition, model, depth, panX, panY * 0.35)
 
     if model.SetCamDistanceScale then
         local distanceScale = CAMERA_DISTANCE_BASE - (zoom * CAMERA_DISTANCE_PER_ZOOM)
         distanceScale = ClampValue(distanceScale, CAMERA_DISTANCE_MIN, CAMERA_DISTANCE_MAX)
-        usedCameraDistance = pcall(model.SetCamDistanceScale, model, distanceScale)
-    end
-
-    if usedCameraDistance then
-        pcall(model.SetPosition, model, 0, panX, panY)
-    else
-        pcall(model.SetPosition, model, zoom, panX, panY)
+        pcall(model.SetCamDistanceScale, model, distanceScale)
     end
 end
 
@@ -2308,6 +2459,16 @@ GearContainer:HookScript("OnMouseWheel", function(self, delta)
 end)
 
 BotModel:SetScript("OnUpdate", function(self, elapsed)
+    if self.refreshUnit and GetTime() < (self.refreshUntil or 0) then
+        SetBotModelUnit(self.refreshUnit)
+        ApplyBotModelTransform(self)
+        if self.SetRotation then
+            self:SetRotation(self.rotation or 0.35)
+        end
+    elseif self.refreshUnit then
+        self.refreshUnit = nil
+        self.refreshUntil = nil
+    end
     -- Handle left-click rotation
     if self.isRotating then
         if IsMouseButtonDown and not IsMouseButtonDown("LeftButton") then

@@ -112,7 +112,7 @@ namespace
         return data->shared_owners.contains(ownerLow);
     }
 
-    std::string GetBotClassDisplayName(uint8 botClass)
+    std::string GetBotClassDisplayName(uint8 botClass, LocaleConstant locale)
     {
         switch (botClass)
         {
@@ -131,9 +131,70 @@ namespace
 
         uint8 const playerClass = BotMgr::GetBotPlayerClass(botClass);
         if (playerClass != CLASS_NONE)
-            return GetClassName(playerClass, DEFAULT_LOCALE);
+            return GetClassName(playerClass, locale);
 
         return "Bot";
+    }
+
+    Creature const* FindPlayerBotByEntry(Player const* player, uint32 entry)
+    {
+        if (!player)
+            return nullptr;
+
+        BotMgr const* mgr = player->GetBotMgr();
+        if (!mgr)
+            return nullptr;
+
+        BotMap const* botMap = mgr->GetBotMap();
+        if (!botMap)
+            return nullptr;
+
+        for (auto const& [guid, bot] : *botMap)
+        {
+            if (bot && bot->GetEntry() == entry)
+                return bot;
+        }
+
+        return nullptr;
+    }
+
+    void ResolveBotIdentityForBmu(Player const* player, uint32 entry, NpcBotData const* data,
+        uint32& playerRace, uint8& gender, std::string& className)
+    {
+        LocaleConstant const locale = player && player->GetSession() ?
+            player->GetSession()->GetSessionDbLocaleIndex() : DEFAULT_LOCALE;
+
+        playerRace = RACE_HUMAN;
+        gender = GENDER_MALE;
+        className = "Bot";
+
+        uint8 botClass = BOT_CLASS_NONE;
+
+        if (Creature const* bot = FindPlayerBotByEntry(player, entry))
+        {
+            if (bot->GetBotAI())
+            {
+                botClass = bot->GetBotAI()->GetBotClass();
+                playerRace = BotMgr::GetBotPlayerRace(bot);
+            }
+        }
+        else if (NpcBotExtras const* extras = BotDataMgr::SelectNpcBotExtras(entry))
+        {
+            if (botClass == BOT_CLASS_NONE)
+                botClass = extras->bclass;
+            playerRace = BotMgr::GetBotPlayerRace(extras->bclass, extras->race);
+        }
+
+        if (botClass != BOT_CLASS_NONE)
+            className = GetBotClassDisplayName(botClass, locale);
+
+        if (className.empty())
+            className = "Bot";
+
+        if (NpcBotAppearanceData const* appearance = BotDataMgr::SelectNpcBotAppearance(entry))
+            gender = appearance->gender;
+
+        (void)data;
     }
 
     std::string EscapeAddonField(std::string_view value)
@@ -283,53 +344,15 @@ namespace
         }
     }
 
-    Creature const* FindPlayerBotByEntry(Player const* player, uint32 entry)
-    {
-        if (!player)
-            return nullptr;
-
-        BotMgr const* mgr = player->GetBotMgr();
-        if (!mgr)
-            return nullptr;
-
-        BotMap const* botMap = mgr->GetBotMap();
-        if (!botMap)
-            return nullptr;
-
-        for (auto const& [guid, bot] : *botMap)
-        {
-            if (bot && bot->GetEntry() == entry)
-                return bot;
-        }
-
-        return nullptr;
-    }
-
-    // By leewheel 20260528 - BMU list name must match in-world bot (live creature first).
+    // By leewheel 20260530 - BMU name must match party frame (GetNpcBotDisplayName / NAME_QUERY rules).
     std::string ResolveBotNameForBmu(Player const* player, uint32 entry, CreatureTemplate const* proto)
     {
-        if (Creature const* bot = FindPlayerBotByEntry(player, entry))
+        if (player && player->GetSession())
         {
-            std::string const liveName = bot->GetName();
-            if (!liveName.empty())
-                return liveName;
+            std::string const displayName = BotDataMgr::GetNpcBotDisplayName(entry, player->GetSession()->GetSessionDbLocaleIndex());
+            if (!displayName.empty())
+                return displayName;
         }
-
-        if (Creature const* bot = BotDataMgr::FindBot(entry))
-        {
-            std::string const liveName = bot->GetName();
-            if (!liveName.empty())
-                return liveName;
-        }
-
-        if (CreatureTemplate const* extra = BotDataMgr::GetBotExtraCreatureTemplate(entry))
-        {
-            if (!extra->Name.empty())
-                return extra->Name;
-        }
-
-        if (std::string_view customName = BotDataMgr::GetNpcBotAppearanceName(entry); !customName.empty())
-            return std::string(customName);
 
         return proto ? proto->Name : "Bot";
     }
@@ -353,31 +376,14 @@ namespace
 
         std::string const botName = ResolveBotNameForBmu(player, entry, proto);
         uint32 const displayId = ResolveBotDisplayIdForBmu(player, entry, proto);
-        uint32 race = 0;
-        uint8 gender = 0;
+        uint32 playerRace = RACE_HUMAN;
+        uint8 gender = GENDER_MALE;
         std::string className = "Bot";
-
-        if (NpcBotExtras const* extras = BotDataMgr::SelectNpcBotExtras(entry))
-        {
-            race = extras->race;
-            className = GetBotClassDisplayName(extras->bclass);
-        }
-        else if (!proto->Title.empty())
-        {
-            className = proto->Title;
-            if (className.ends_with(" Bot"))
-                className.resize(className.size() - 4);
-        }
-
-        if (className.empty())
-            className = "Bot";
-
-        if (NpcBotAppearanceData const* appearance = BotDataMgr::SelectNpcBotAppearance(entry))
-            gender = appearance->gender;
+        ResolveBotIdentityForBmu(player, entry, data, playerRace, gender, className);
 
         std::ostringstream ss;
         ss << "B;" << entry << ';' << EscapeAddonField(botName) << ';' << data->roles << ';' << EscapeAddonField(className)
-           << ';' << displayId << ';' << race << ';' << uint32(gender)
+           << ';' << displayId << ';' << playerRace << ';' << uint32(gender)
            << ';' << uint32(player->GetLevel()) << ';' << uint32(data->spec);
 
         SendBMU(player, ss.str());

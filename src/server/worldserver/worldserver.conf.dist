@@ -4823,6 +4823,20 @@ NpcBot.DungeonBots.Enable = 1
 NpcBot.AutoLFG.Enable = 1
 
 #
+#    NpcBot.RaidBots.Enable
+#        Description: Hire world bots to fill LFG raid groups (10/25/40) at proposal time
+#        Default:     1 - (Enabled)
+
+NpcBot.RaidBots.Enable = 1
+
+#
+#    NpcBot.AutoLFG.Raid.Enable
+#        Description: Solo/partial raid LFG join instantly matches and fills with bots
+#        Default:     1 - (Enabled)
+
+NpcBot.AutoLFG.Raid.Enable = 1
+
+#
 #    NpcBot.DungeonBots.MaxItemLevel.Ratio
 #        Description: Maximum item ilevel to generate for dungeon bots per level bracket compared
 #                     to dungeon max item level.

@@ -133,6 +133,10 @@ static std::string BuildQwenChatPromptFallback(std::string const& scenePrompt)
     std::ostringstream oss;
     oss << "<|im_start|>system\n"
         << "你是魔兽世界资深玩家。只输出一句简体中文游戏口语。"
+        << "直接回应场景里队友/玩家刚说的话，可以寒暄、接梗、开玩笑。"
+        << "必须说完整的一句话，以句号/问号/感叹号收束，不要说到一半就停。"
+        << "禁止编造刚施放过技能、buff、护盾、专精名称；没发生的事不要提。"
+        << "禁止复读「保持节奏」「稳住节奏」「等队友就位」等罐头战术句，除非场景明确正在激烈团本战斗。"
         << "不要输出思考过程，不要输出任何XML或特殊标签。"
         << "不得承认自己是机器人、AI、程序或脚本。建议50-80个汉字，在有限字数内把意思表达清楚。"
         << kImEnd << "\n"
@@ -447,6 +451,54 @@ bool Engine::IsEnabled() const
 #endif
 }
 
+static size_t CountUtf8Codepoints(std::string_view text)
+{
+    size_t count = 0;
+    for (size_t i = 0; i < text.size();)
+    {
+        unsigned char c = static_cast<unsigned char>(text[i]);
+        size_t n = 1;
+        if ((c & 0x80) == 0x00)
+            n = 1;
+        else if ((c & 0xE0) == 0xC0)
+            n = 2;
+        else if ((c & 0xF0) == 0xE0)
+            n = 3;
+        else if ((c & 0xF8) == 0xF0)
+            n = 4;
+        if (i + n > text.size())
+            break;
+        ++count;
+        i += n;
+    }
+    return count;
+}
+
+static bool EndsWithSentencePunct(std::string_view text)
+{
+    return text.ends_with("。") || text.ends_with("！") || text.ends_with("？") ||
+        text.ends_with("~") || text.ends_with("…") || text.ends_with(".");
+}
+
+static std::string TrimIncompleteSentenceTail(std::string text)
+{
+    if (text.empty() || EndsWithSentencePunct(text))
+        return text;
+
+    static std::array<std::string_view, 5> const punct = { "。", "！", "？", "~", "…" };
+    size_t bestCut = std::string::npos;
+    for (std::string_view p : punct)
+    {
+        size_t pos = text.rfind(p);
+        if (pos != std::string::npos)
+            bestCut = std::max(bestCut, pos + p.size());
+    }
+
+    if (bestCut != std::string::npos && bestCut >= text.size() / 2)
+        text.resize(bestCut);
+    return text;
+}
+
 std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt) const
 {
     if (!bot || !IsEnabled())
@@ -487,17 +539,18 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.9f, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED + bot->GetEntry()));
 
     std::string output;
     std::string carry;
     bool inThinking = false;
     output.reserve(256);
     carry.reserve(128);
-    // Thinking tokens still consume decode budget even when filtered; allow headroom for short replies.
-    constexpr int32_t maxGen = 96;
-    constexpr size_t targetVisibleChars = 72;
-    size_t visibleChars = 0;
+    // By leewheel 20260530 - count UTF-8 codepoints (not bytes); 72 bytes was ~24 Han chars and cut mid-sentence.
+    constexpr int32_t maxGen = 160;
+    constexpr size_t targetCodepoints = 80;
+    constexpr size_t hardCodepointCap = 100;
+    size_t visibleCodepoints = 0;
     for (int32_t i = 0; i < maxGen; ++i)
     {
         llama_token token = llama_sampler_sample(smpl, rt->context, -1);
@@ -512,7 +565,7 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
             if (!visible.empty())
             {
                 output += visible;
-                visibleChars += visible.size();
+                visibleCodepoints = CountUtf8Codepoints(output);
             }
         }
 
@@ -521,12 +574,15 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
         if (llama_decode(rt->context, next) < 0)
             break;
 
-        if (visibleChars >= targetVisibleChars)
+        if (visibleCodepoints >= targetCodepoints && EndsWithSentencePunct(output))
+            break;
+        if (visibleCodepoints >= hardCodepointCap)
             break;
     }
 
     llama_sampler_free(smpl);
     output = StripReasoningContent(std::move(output));
+    output = TrimIncompleteSentenceTail(std::move(output));
     if (output.empty() || ContainsThinkingMarker(output))
         return {};
     return output;

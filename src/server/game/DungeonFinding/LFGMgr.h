@@ -27,6 +27,10 @@
 #include "SharedDefines.h"
 #include <unordered_map>
 
+//npcbot
+#include "botdatamgr.h"
+//end npcbot
+
 class Group;
 class Player;
 class Quest;
@@ -430,6 +434,12 @@ class TC_GAME_API LFGMgr
         /// Sends queue status to player
         static void SendLfgQueueStatus(ObjectGuid guid, LfgQueueStatusData const& data);
 
+        //npcbot - LFG dungeon bots hired from world pool (LWCorePlus style)
+        NpcBotRegistry const& GetDungeonFinderBots() const { return _dungeonfinderbots; }
+        void RegisterDungeonFinderBot(Creature const* bot) { if (bot) _dungeonfinderbots.insert(bot); }
+        void RemoveDungeonFinderBotFromList(Creature const* bot) { _dungeonfinderbots.erase(bot); }
+        //end npcbot
+
     private:
         uint8 GetTeam(ObjectGuid guid);
         uint8 FilterClassRoles(Player* player, uint8 roles);
@@ -448,6 +458,9 @@ class TC_GAME_API LFGMgr
         // Proposals
         void RemoveProposal(LfgProposalContainer::iterator itProposal, LfgUpdateType type);
         void MakeNewGroup(LfgProposal const& proposal);
+        void PopulateProposalBotSlots(LfgProposal& proposal);
+        void HireBotsFromProposal(LfgProposal& proposal);
+        void StartInstantRaidLfg(Player* player, uint8 roles, LfgDungeonSet const& dungeons, std::string const& comment, Group* grp);
 
         // Generic
         LFGQueue &GetQueue(ObjectGuid guid);
@@ -480,6 +493,10 @@ class TC_GAME_API LFGMgr
         LfgPlayerBootContainer BootsStore;                 /// Current player kicks
         LfgPlayerDataContainer PlayersStore;               /// Player data
         LfgGroupDataContainer GroupsStore;                 /// Group data
+
+        //npcbot
+        NpcBotRegistry _dungeonfinderbots;
+        //end npcbot
 };
 
 inline int32 format_as(LFGMgrEnum e) { return e; }

@@ -2612,6 +2612,14 @@ void Group::ResetInstances(uint8 method, bool isRaid, Player* SendMsgTo)
         else
             ++itr;
     }
+
+    // By leewheel 20260530 - reset all instances also clears random LFG dungeon cooldown
+    if (method == INSTANCE_RESET_ALL)
+    {
+        for (GroupReference* ref = GetFirstMember(); ref; ref = ref->next())
+            if (Player* player = ref->GetSource())
+                player->RemoveAurasDueToSpell(lfg::LFG_SPELL_DUNGEON_COOLDOWN);
+    }
 }
 
 InstanceGroupBind* Group::GetBoundInstance(Player* player)

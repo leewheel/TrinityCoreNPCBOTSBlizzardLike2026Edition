@@ -51,30 +51,13 @@ void WorldSession::SendNameQueryOpcode(ObjectGuid guid)
         CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(creatureId);
         if (creatureTemplate && creatureTemplate->IsNPCBot())
         {
-            std::string_view creatureName = creatureTemplate->Name;
-            // Wandering / runtime-generated bots: display name from appearance table (`name*`)
-            if (CreatureTemplate const* extraTemplate = BotDataMgr::GetBotExtraCreatureTemplate(creatureId))
-            {
-                if (std::string_view appName = BotDataMgr::GetNpcBotAppearanceName(creatureId); !appName.empty())
-                    creatureName = appName;
-                else if (uint32 const origEntry = extraTemplate->KillCredit[0])
-                    if (std::string_view origName = BotDataMgr::GetNpcBotAppearanceName(origEntry); !origName.empty())
-                        creatureName = origName;
-            }
-            else if (CreatureLocale const* creatureInfo = sObjectMgr->GetCreatureLocale(creatureId))
-            {
-                uint32 loc = GetSessionDbLocaleIndex();
-                if (creatureInfo->Name.size() > loc && !creatureInfo->Name[loc].empty() && Utf8FitTo(creatureInfo->Name[loc], {}))
-                    creatureName = creatureInfo->Name[loc];
-            }
-
             NpcBotExtras const* extData = ASSERT_NOTNULL(BotDataMgr::SelectNpcBotExtras(creatureId));
             NpcBotAppearanceData const* appData = BotDataMgr::SelectNpcBotAppearance(creatureId);
 
             response.Result = RESPONSE_SUCCESS; // name known
 
             WorldPackets::Query::PlayerGuidLookupData& bdata = response.Data.emplace();
-            bdata.Name = creatureName;
+            bdata.Name = BotDataMgr::GetNpcBotDisplayName(creatureId, GetSessionDbLocaleIndex());
             bdata.Race = BotMgr::GetBotPlayerRace(extData->bclass, extData->race);
             bdata.Sex = appData ? appData->gender : static_cast<uint8>(GENDER_MALE);
             bdata.ClassID = BotMgr::GetBotPlayerClass(extData->bclass);

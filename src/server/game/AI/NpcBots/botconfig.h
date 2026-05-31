@@ -44,6 +44,8 @@ public:
     static bool IsNpcBotDungeonFinderBotGenerationEnabled();
     // By leewheel 20260528 - NpcBot.AutoLFG.Enable (LFG queue bot role fill / faster match)
     static bool IsNpcBotLfgQueueFillEnabled();
+    static bool IsNpcBotRaidFinderBotGenerationEnabled();
+    static bool IsNpcBotRaidLfgAutoFillEnabled();
     static bool LimitNpcBotsInDungeons();
     static bool LimitNpcBotsInRaids();
     static bool IsNpcBotsPremadeEnabled();

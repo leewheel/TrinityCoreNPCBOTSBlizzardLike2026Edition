@@ -28,6 +28,23 @@
 #include "WorldPacket.h"
 #include "WorldSession.h"
 
+namespace
+{
+uint32 GetLfgRoleForClient(uint32 role)
+{
+    role &= ~lfg::PLAYER_ROLE_LEADER;
+    if (!role)
+        return lfg::PLAYER_ROLE_DAMAGE;
+    if (role & lfg::PLAYER_ROLE_TANK)
+        return lfg::PLAYER_ROLE_TANK;
+    if (role & lfg::PLAYER_ROLE_HEALER)
+        return lfg::PLAYER_ROLE_HEALER;
+    if (role & lfg::PLAYER_ROLE_DAMAGE)
+        return lfg::PLAYER_ROLE_DAMAGE;
+    return lfg::PLAYER_ROLE_DAMAGE;
+}
+}
+
 void BuildPlayerLockDungeonBlock(WorldPacket& data, lfg::LfgLockMap const& lock)
 {
     data << uint32(lock.size());                           // Size of lock dungeons
@@ -396,7 +413,7 @@ void WorldSession::SendLfgRoleChosen(ObjectGuid guid, uint8 roles)
     WorldPacket data(SMSG_LFG_ROLE_CHOSEN, 8 + 1 + 4);
     data << guid;                                          // Guid
     data << uint8(roles > 0);                              // Ready
-    data << uint32(roles);                                 // Roles
+    data << uint32(GetLfgRoleForClient(roles));            // Roles
     SendPacket(&data);
 }
 
@@ -426,7 +443,7 @@ void WorldSession::SendLfgRoleCheckUpdate(lfg::LfgRoleCheck const& roleCheck)
         uint8 roles = roleCheck.roles.find(guid)->second;
         data << guid;                                      // Guid
         data << uint8(roles > 0);                          // Ready
-        data << uint32(roles);                             // Roles
+        data << uint32(GetLfgRoleForClient(roles));        // Roles
         Player* player = ObjectAccessor::FindConnectedPlayer(guid);
         data << uint8(player ? player->GetLevel() : 0);    // Level
 
@@ -439,7 +456,7 @@ void WorldSession::SendLfgRoleCheckUpdate(lfg::LfgRoleCheck const& roleCheck)
             roles = it->second;
             data << guid;                                  // Guid
             data << uint8(roles > 0);                      // Ready
-            data << uint32(roles);                         // Roles
+            data << uint32(GetLfgRoleForClient(roles));    // Roles
             player = ObjectAccessor::FindConnectedPlayer(guid);
             data << uint8(player ? player->GetLevel() : 0);// Level
         }
@@ -588,7 +605,7 @@ void WorldSession::SendLfgUpdateProposal(lfg::LfgProposal const& proposal)
     {
         lfg::LfgProposalPlayer const& player = it->second;
 
-        data << uint32(player.role);                       // Role
+        data << uint32(GetLfgRoleForClient(player.role));   // Role
         data << uint8(it->first == guid);                  // Self player
         if (!player.group)                                 // Player not it a group
         {

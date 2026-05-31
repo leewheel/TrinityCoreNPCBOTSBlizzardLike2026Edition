@@ -5438,10 +5438,76 @@ bool bot_ai::_canSwitchToTarget(Unit const* from, Unit const* newTarget, int8 by
 
     return false;
 }
+
+namespace
+{
+bool IsHealOnlyBot(bot_ai const* ai)
+{
+    return ai && ai->HasRole(BOT_ROLE_HEAL) && !ai->HasRole(BOT_ROLE_DPS);
+}
+
+Unit const* GetHealerSupportAnchor(bot_ai const* ai, Player const* master)
+{
+    if (Group const* gr = master->GetGroup())
+    {
+        for (GroupReference const* itr = gr->GetFirstMember(); itr != nullptr; itr = itr->next())
+        {
+            Player const* pl = itr->GetSource();
+            if (pl && pl->IsAlive() && !pl->HasUnitState(UNIT_STATE_ISOLATED) && ai->IsTank(pl))
+                return pl;
+        }
+
+        for (GroupReference const* itr = gr->GetFirstMember(); itr != nullptr; itr = itr->next())
+        {
+            Player const* pl = itr->GetSource();
+            if (!pl || !pl->HaveBot())
+                continue;
+
+            for (auto const& [_, c] : *pl->GetBotMgr()->GetBotMap())
+            {
+                if (c && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && ai->IsTank(c))
+                    return c;
+            }
+        }
+    }
+
+    for (auto const& [_, c] : *master->GetBotMgr()->GetBotMap())
+    {
+        if (c && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && ai->IsTank(c))
+            return c;
+    }
+
+    return master;
+}
+
+void CalculateHealerSupportPos(bot_ai const* ai, Creature const* unit, Player const* master, Unit const* threat, Position& pos, bool& force)
+{
+    uint8 const followdist = master->GetBotMgr()->GetBotFollowDist();
+    float supportDist = std::max({ float(std::max<uint8>(followdist, 25)), 28.f });
+    supportDist = std::min(supportDist, 36.f);
+
+    Unit const* anchor = GetHealerSupportAnchor(ai, master);
+    float angle = threat ? anchor->GetAbsoluteAngle(threat) : anchor->GetOrientation();
+    angle = Position::NormalizeOrientation(angle + float(M_PI));
+    angle += float(int(unit->GetEntry() % 5) - 2) * 0.15f;
+
+    pos = anchor->GetFirstCollisionPosition(supportDist, angle);
+    force = unit->GetExactDist(&pos) > 5.f;
+}
+}
+
 //Ranged attack position
 void bot_ai::CalculateAttackPos(Unit* target, Position& pos, bool& force) const
 {
     uint8 followdist = IAmFree() ? BotMgr::GetBotFollowDistMax() : master->GetBotMgr()->GetBotFollowDist();
+
+    // By leewheel 20260531 - pure healers stay at support range behind tank, not in the mob stack
+    if (!IAmFree() && IsHealOnlyBot(this))
+    {
+        CalculateHealerSupportPos(this, me, master, target, pos, force);
+        return;
+    }
+
     uint8 rangeMode = IAmFree() ? uint8(BOT_ATTACK_RANGE_LONG) : master->GetBotMgr()->GetBotAttackRangeMode();
     uint8 exactRange = rangeMode != BOT_ATTACK_RANGE_EXACT || IAmFree() ? 255 : master->GetBotMgr()->GetBotExactAttackRange();
     uint8 angleMode = IAmFree() ? uint8(BOT_ATTACK_ANGLE_NORMAL) : master->GetBotMgr()->GetBotAttackAngleMode();
@@ -5601,14 +5667,20 @@ void bot_ai::CalculateAttackPos(Unit* target, Position& pos, bool& force) const
     }
     else if (!aoespots.empty() && !IAmFree())
     {
-        pos.Relocate(master);
-        force = true;
+        if (IsHealOnlyBot(this))
+            CalculateHealerSupportPos(this, me, master, target, pos, force);
+        else
+        {
+            pos.Relocate(master);
+            force = true;
+        }
         return;
     }
 
     // Ranged bots that are being targeted should move towards a tank bot or towards the player
     if (!IAmFree() && !IsTank(me) && HasRole(BOT_ROLE_RANGED) && target->GetVictim() == me && !CCed(target))
     {
+        float const retreatDist = IsHealOnlyBot(this) ? 16.f : 1.5f;
         std::vector<Unit const*> safetyTargets;
         if (Group const* gr = master->GetGroup())
         {
@@ -5623,7 +5695,7 @@ void bot_ai::CalculateAttackPos(Unit* target, Position& pos, bool& force) const
                     continue;
                 for (auto const& [_, c] : *pl->GetBotMgr()->GetBotMap())
                 {
-                    if (c && c->IsInWorld() && me->GetMap() == c->FindMap() && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && IsTank(c) && c->GetBotAI()->HasRole(BOT_ROLE_DPS))
+                    if (c && c->IsInWorld() && me->GetMap() == c->FindMap() && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && IsTank(c))
                         safetyTargets.push_back(c);
                 }
             }
@@ -5632,7 +5704,7 @@ void bot_ai::CalculateAttackPos(Unit* target, Position& pos, bool& force) const
         {
             for (auto const& [_, c] : *master->GetBotMgr()->GetBotMap())
             {
-                if (c && c->IsInWorld() && me->GetMap() == c->FindMap() && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && IsTank(c) && c->GetBotAI()->HasRole(BOT_ROLE_DPS))
+                if (c && c->IsInWorld() && me->GetMap() == c->FindMap() && c->IsAlive() && !c->HasUnitState(UNIT_STATE_ISOLATED) && IsTank(c))
                     safetyTargets.push_back(c);
             }
         }
@@ -5641,12 +5713,11 @@ void bot_ai::CalculateAttackPos(Unit* target, Position& pos, bool& force) const
 
         if (!safetyTargets.empty())
         {
-            static const float ThresholdDistance = 1.5f;
             Unit const* moveTarget = safetyTargets.size() == 1u ? safetyTargets.front() : safetyTargets[me->GetEntry() % safetyTargets.size()];
-            if (moveTarget->GetDistance(target) > ThresholdDistance && me->GetDistance(moveTarget) > ThresholdDistance * 2.0f)
+            if (moveTarget->GetDistance(target) > retreatDist && me->GetDistance(moveTarget) > retreatDist * 2.0f)
             {
-                float distanceMod = moveTarget->HasInArc(float(M_PI), target) ? 0.5f : -1.5f;
-                pos.Relocate(moveTarget->GetFirstCollisionPosition(ThresholdDistance * distanceMod, Position::NormalizeOrientation(moveTarget->GetAbsoluteAngle(target) - moveTarget->GetOrientation())));
+                float distanceMod = IsHealOnlyBot(this) ? retreatDist : (moveTarget->HasInArc(float(M_PI), target) ? 0.5f : -1.5f);
+                pos.Relocate(moveTarget->GetFirstCollisionPosition(distanceMod, Position::NormalizeOrientation(moveTarget->GetAbsoluteAngle(target) - moveTarget->GetOrientation())));
                 force = true;
                 return;
             }
@@ -5681,6 +5752,15 @@ void bot_ai::GetInPosition(bool force, Unit* newtarget, Position* mypos)
         return;
     if (AdjustTankingPosition(newtarget))
         return;
+
+    // By leewheel 20260531 - healers reposition at support range, do not chase into melee
+    if (!IAmFree() && IsHealOnlyBot(this))
+    {
+        CalculateAttackPos(newtarget, attackpos, force);
+        if (mover->GetExactDist2d(&attackpos) > (force ? 0.1f : 3.f))
+            BotMovement(BOT_MOVE_POINT, &attackpos);
+        return;
+    }
 
     if (!IAmFree() && master->GetBotMgr()->GetBotAttackRangeMode() == BOT_ATTACK_RANGE_EXACT &&
         master->GetBotMgr()->GetBotExactAttackRange() == 0)
@@ -16144,6 +16224,9 @@ void bot_ai::JustEnteredCombat(Unit* u)
     if (IsActionNext(BotActionTypes::BOT_ACTION_PULL, 0, u->GetGUID()))
         CompleteAction(GetFirstActionInQueue());
 
+    if (!IAmFree() && u)
+        BotDataMgr::NotifyBotCombatScene(me, u);
+
     if (IAmFree() && me->GetVictim() && me->GetVictim() != u &&
         (me->getAttackers().empty() || (me->getAttackers().size() == 1u && *me->getAttackers().begin() == u)) &&
         me->GetVictim()->GetVictim() != me && !(me->GetVictim()->IsInCombat() || me->GetVictim()->IsInCombatWith(me)))
@@ -18132,6 +18215,20 @@ bool bot_ai::GlobalUpdate(uint32 diff)
 
         //Medium-timed updates
 
+        if (!IAmFree() && me->IsInCombat() && BotCfg::IsBotChatEnabled())
+        {
+            if (Unit* vic = me->GetVictim())
+            {
+                if (vic->HasUnitState(UNIT_STATE_CASTING))
+                {
+                    if (Spell const* curSpell = vic->GetCurrentSpell(CURRENT_GENERIC_SPELL))
+                        BotDataMgr::NotifyBotCastScene(me, vic, curSpell->GetSpellInfo()->Id);
+                    else if (Spell const* chanSpell = vic->GetCurrentSpell(CURRENT_CHANNELED_SPELL))
+                        BotDataMgr::NotifyBotCastScene(me, vic, chanSpell->GetSpellInfo()->Id);
+                }
+            }
+        }
+
         // By leewheel 20260529 - wanderer greet + vendor stock tick (no right-click trade).
         if (IAmFree() && IsWanderer() && me->IsInWorld() && me->IsAlive() && !me->IsInCombat())
             BotDataMgr::UpdateWandererSocial(me);
@@ -18885,6 +18982,9 @@ void bot_ai::CommonTimers(uint32 diff)
     if (_updateTimerLong > diff)    _updateTimerLong -= diff;
     if (_updateTimerEx1 > diff)     _updateTimerEx1 -= diff;
     if (_updateTimerEx2 > diff)     _updateTimerEx2 -= diff;
+
+    if (!IAmFree() && BotCfg::IsBotChatEnabled())
+        BotDataMgr::UpdateBotAmbientChat(me, diff);
 
     if (_saveDisabledSpellsTimer > diff) _saveDisabledSpellsTimer -= diff;
     if (_saveMiscValuesTimer > diff)     _saveMiscValuesTimer -= diff;

@@ -31,6 +31,20 @@ WANDER_CLASSES = [
     (11, "Druid", "druid_bot"),
 ]
 
+# creature_template.subname by class — synced from live world DB (70001-70599), not "xxx Bot".
+SUBNAME_BY_CLASS: dict[int, str] = {
+    1: "永恒戍卫",
+    2: "白银之手",
+    3: "荒野生存者",
+    4: "军情七处",
+    5: "圣光教会",
+    6: "黑锋骑士团",
+    7: "五行教",
+    8: "黑暗料理师",
+    9: "恶魔契约",
+    11: "塞纳留斯学院",
+}
+
 SURNAMES = list(
     "赵钱孙李周吴郑王冯陈褚卫蒋沈韩杨朱秦尤许何吕施张孔曹严华金魏陶姜戚谢邹喻"
     "柏水窦章云苏潘葛奚范彭郎鲁韦昌马苗凤花方俞任袁柳酆鲍史唐费廉岑薛雷贺倪汤"
@@ -136,13 +150,13 @@ def make_name(used: set[str]) -> str:
     raise RuntimeError("Ran out of unique names")
 
 
-def clone_creature_row(proto_tail: str, entry: int, name: str, class_label: str, script: str) -> str:
+def clone_creature_row(proto_tail: str, entry: int, name: str, subname: str, script: str) -> str:
     tail = proto_tail.rstrip()
     if tail.endswith(")"):
         tail = tail[:-1]
     parts = tail.split(",", 2)
     rest = parts[2]
-    rest = re.sub(r"'[^']*','[^']*'", f"'{name}','{class_label}'", rest, count=1)
+    rest = re.sub(r"'[^']*','[^']*'", f"'{name}','{subname}'", rest, count=1)
     rest = re.sub(r",'[^']*_bot'", f",'{script}'", rest)
     return f"({entry},{parts[0]},{parts[1]},{rest})"
 
@@ -161,13 +175,14 @@ def main() -> None:
     equip_values: list[str] = []
 
     entry = ENTRY_FIRST
-    for bot_class, class_label, script in WANDER_CLASSES:
+    for bot_class, _class_label, script in WANDER_CLASSES:
+        subname = SUBNAME_BY_CLASS.get(bot_class, "")
         proto_list = prototypes[bot_class]
         for i in range(BOTS_PER_CLASS):
             proto_entry = proto_list[i % len(proto_list)]
             name = make_name(used_names)
             creature_values.append(
-                clone_creature_row(creature_rows[proto_entry], entry, name, f"{class_label} Bot", script)
+                clone_creature_row(creature_rows[proto_entry], entry, name, subname, script)
             )
             cls, race = extras[proto_entry]
             extras_values.append(f"({entry},{cls},{race})")

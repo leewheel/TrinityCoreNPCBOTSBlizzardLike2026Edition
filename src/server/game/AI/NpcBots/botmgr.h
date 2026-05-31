@@ -198,6 +198,7 @@ public:
     void RemoveAllSummonedBots();
     // By leewheel 20260528 - dismiss only LFG service summons (NPCBOT_HIRE_LFG), keep hired party bots
     void RemoveLfgServiceBots();
+    void TryDismissStaleLfgServiceBots();
     void RemoveAllBots(uint8 removetype = BOT_REMOVE_LOGOUT);
     void RemoveBot(ObjectGuid guid, uint8 removetype = BOT_REMOVE_LOGOUT);
     void UnbindBot(ObjectGuid guid);
@@ -205,11 +206,16 @@ public:
     [[nodiscard]] BotAddResult AddDungeonBot(Creature* bot);
     [[nodiscard]] BotAddResult AddBot(Creature* bot);
     // By leewheel 20260523
-    [[nodiscard]] BotAddResult AddBotEx(Creature* bot, bool chargeHireCost = true);
+    [[nodiscard]] BotAddResult AddBotEx(Creature* bot, bool chargeHireCost = true, bool addToGroup = true);
     [[nodiscard]] BotAddResult AddServiceBot(Creature* bot, uint32 botRole);
     void DismissQuickGroupBots();
     // end By leewheel 20260523
     static void SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole);
+    // By leewheel 20260530 - LFG random dungeon role helpers (LWCorePlus style)
+    static bool PlayerIsMainTank(Player const* player);
+    static bool PlayerIsHealer(Player const* player);
+    static void CountBotsTowardPartyRoles(BotMap const* botMap, uint8& tanksNeeded, uint8& healersNeeded, uint8& dpsNeeded, uint8* botsToHire = nullptr);
+    // end By leewheel 20260530
     bool AddBotToGroup(Creature* bot);
     void RemoveBotFromBGQueue(Creature const* bot);
     bool RemoveBotFromGroup(Creature* bot);

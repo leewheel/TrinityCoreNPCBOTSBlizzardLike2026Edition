@@ -20337,6 +20337,10 @@ void Player::ResetInstances(uint8 method, bool isRaid)
         // the following should remove the instance save from the manager and delete it as well
         p->RemovePlayer(this);
     }
+
+    // By leewheel 20260530 - reset all instances also clears random LFG dungeon cooldown
+    if (method == INSTANCE_RESET_ALL)
+        RemoveAurasDueToSpell(lfg::LFG_SPELL_DUNGEON_COOLDOWN);
 }
 
 void Player::SendResetInstanceSuccess(uint32 MapId) const

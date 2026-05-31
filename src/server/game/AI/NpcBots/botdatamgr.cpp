@@ -26,6 +26,7 @@
 #include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
+#include "ObjectAccessor.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -158,6 +159,9 @@ static std::unordered_map<uint32, size_t> _botChatDirectMentionFirstPosByEntry;
 static std::unordered_map<uint32, std::string> _botChatUrgentChannelByEntry;
 static std::unordered_map<uint32, uint32> _botChatUrgentMapByEntry;
 static uint32 _botChatTickerMs = 0;
+static std::unordered_map<uint32, uint32> _botAmbientChatTimerMs;
+static std::unordered_map<uint32, std::deque<std::string>> _botChatRecentLinesByEntry;
+static constexpr size_t BOT_CHAT_RECENT_LINES_MAX = 6;
 // By leewheel 20260529 - per (bot, player) wanderer greet cooldown.
 static std::unordered_map<uint64, uint32> _wandererGreetCooldownUntilMs;
 
@@ -366,7 +370,329 @@ static std::string PopLatestSceneEvent(uint32 botEntry)
     return ev;
 }
 
+static bool HasPendingSceneEvent(uint32 botEntry)
+{
+    auto itr = _botChatRecentSceneEvents.find(botEntry);
+    return itr != _botChatRecentSceneEvents.end() && !itr->second.empty();
+}
+
+static Player* ResolveConnectedBotOwner(Creature const* bot)
+{
+    if (!bot || !bot->GetBotAI() || bot->GetBotAI()->IAmFree())
+        return nullptr;
+
+    ObjectGuid::LowType const ownerLow = bot->GetBotAI()->GetBotOwnerGuid();
+    if (!ownerLow)
+        return nullptr;
+
+    Player* owner = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(ownerLow));
+    if (!owner || !owner->IsInWorld())
+        return nullptr;
+
+    return owner;
+}
+
+static Group const* LookupPlayerGroupSafe(Player* player)
+{
+    if (!player || !player->GetGroupRef().isValid())
+        return nullptr;
+
+    Group* gr = player->GetGroup();
+    if (!gr)
+        return nullptr;
+
+    if (sGroupMgr->GetGroupByGUID(gr->GetGUID()) != gr)
+        return nullptr;
+
+    return gr;
+}
+
+static Group const* ResolveBotChatGroup(Creature const* bot)
+{
+    if (!bot)
+        return nullptr;
+
+    Player* owner = ResolveConnectedBotOwner(bot);
+    if (!owner)
+        return nullptr;
+
+    Group const* gr = LookupPlayerGroupSafe(owner);
+    if (!gr)
+        return nullptr;
+
+    Group* mutGr = const_cast<Group*>(gr);
+    ObjectGuid const botGuid = bot->GetGUID();
+    if (!mutGr->IsMember(botGuid) && !mutGr->IsMember(owner->GetGUID()))
+        return nullptr;
+
+    return gr;
+}
+
+static Player const* ResolveBotChatOwner(Creature const* bot)
+{
+    return ResolveConnectedBotOwner(bot);
+}
+
+static bool BotHasHiredSquad(Creature const* bot, Player const** outOwner = nullptr)
+{
+    Player const* owner = ResolveBotChatOwner(bot);
+    if (!owner)
+        return false;
+    if (outOwner)
+        *outOwner = owner;
+    return true;
+}
+
+static bool LooksLikeRepetitiveBotLine(std::string_view text)
+{
+    if (text.empty())
+        return true;
+    static std::string_view const bannedSubstrings[] =
+    {
+        "节奏太稳", "稳住节奏", "保持节奏", "咱这节奏", "咱们节奏", "节奏太快了", "节奏太快",
+        "歇口气", "探探路", "别掉队", "回头我去", "聚点前"
+    };
+    for (std::string_view key : bannedSubstrings)
+    {
+        if (text.find(key) != std::string_view::npos)
+            return true;
+    }
+    return false;
+}
+
+static bool IsRepeatedBotChatLine(uint32 entry, std::string const& msg)
+{
+    auto itr = _botChatRecentLinesByEntry.find(entry);
+    if (itr == _botChatRecentLinesByEntry.end())
+        return false;
+    for (std::string const& prev : itr->second)
+    {
+        if (prev == msg)
+            return true;
+        if (prev.size() >= 8 && msg.size() >= 8 && prev.substr(0, 8) == msg.substr(0, 8))
+            return true;
+    }
+    return false;
+}
+
+static void RememberBotChatLine(uint32 entry, std::string const& msg)
+{
+    auto& recent = _botChatRecentLinesByEntry[entry];
+    recent.push_back(msg);
+    while (recent.size() > BOT_CHAT_RECENT_LINES_MAX)
+        recent.pop_front();
+}
+
+static std::string PickNonRepeatingPartyLine(Creature const* bot, std::string_view channelHint)
+{
+    static std::string_view const travelLines[] =
+    {
+        "前面路口左拐，跟紧。",
+        "补给还够吗？不够说一声。",
+        "这波怪我来开，你们准备。",
+        "马上到任务点了。",
+        "先清这波，再往前推。",
+        "注意背后，可能有巡逻。",
+        "我去看下前面有没有怪。",
+        "歇会儿也行，我不急。"
+    };
+    static std::string_view const banterLines[] =
+    {
+        "行，听你的。",
+        "收到，跟上。",
+        "可以，走。",
+        "没问题。",
+        "好嘞。",
+        "嗯，继续。"
+    };
+    std::string_view const* pool = (channelHint == "小队频道" || channelHint == "团队频道") ? travelLines : banterLines;
+    size_t const poolSize = (channelHint == "小队频道" || channelHint == "团队频道") ? std::size(travelLines) : std::size(banterLines);
+    for (uint8 attempt = 0; attempt < 8; ++attempt)
+    {
+        std::string candidate = std::string(pool[(bot->GetEntry() + attempt + urand(0, uint32(poolSize - 1))) % poolSize]);
+        if (!IsRepeatedBotChatLine(bot->GetEntry(), candidate) && !LooksLikeRepetitiveBotLine(candidate))
+            return candidate;
+    }
+    return std::string(banterLines[bot->GetEntry() % std::size(banterLines)]);
+}
+
+static bool BotChatMapHasPlayers(Creature const* bot)
+{
+    Map const* map = bot ? bot->GetMap() : nullptr;
+    return map && map->HavePlayers();
+}
+
+static bool IsInstanceMapForChat(Map const* map)
+{
+    return map && map->IsDungeon();
+}
+
+static int32 GetBotChatCandidatePriority(Creature const* bot, uint32 nowMs)
+{
+    if (!bot)
+        return 0;
+
+    uint32 const entry = bot->GetEntry();
+    if (_botChatDirectMentionEntries.contains(entry))
+        return 1000;
+    if (_botChatUrgentReplyEntries.contains(entry))
+        return 900;
+    if (HasPendingSceneEvent(entry))
+        return 850;
+
+    if (_botChatCooldownUntilMs[entry] > nowMs)
+        return 0;
+
+    if (ResolveBotChatGroup(bot))
+        return 750;
+    if (BotHasHiredSquad(bot))
+        return 720;
+    if (bot->IsWandererBot() && BotChatMapHasPlayers(bot))
+        return 500;
+    return 0;
+}
+
+static void SeedProactivePartySceneEvent(Creature const* bot)
+{
+    if (!bot || HasPendingSceneEvent(bot->GetEntry()))
+        return;
+
+    Map const* map = bot->GetMap();
+    Player const* owner = ResolveBotChatOwner(bot);
+
+    if (bot->IsInCombat())
+    {
+        if (Unit const* victim = bot->GetVictim())
+        {
+            bool const boss = victim->IsCreature() && victim->ToCreature()->IsDungeonBoss();
+            PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+                "event={}; target={}; map={}",
+                boss ? "BOSS_FIGHT" : "COMBAT_ACTIVE",
+                victim->GetName(), bot->GetMapId()));
+        }
+        else
+        {
+            PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+                "event=COMBAT_ACTIVE; map={}", bot->GetMapId()));
+        }
+    }
+    else if (owner && owner->IsInCombat())
+    {
+        PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+            "event=COMBAT_ACTIVE; map={}; owner={}", bot->GetMapId(), owner->GetName()));
+    }
+    else if (map && map->IsRaid())
+    {
+        PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+            "event=RAID_PROGRESS; map={}", bot->GetMapId()));
+    }
+    else if (map && IsInstanceMapForChat(map))
+    {
+        PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+            "event=DUNGEON_PROGRESS; map={}; instance=1", bot->GetMapId()));
+    }
+    else if (owner && owner->isMoving())
+    {
+        PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+            "event=TRAVEL; map={}; owner={}", bot->GetMapId(), owner->GetName()));
+    }
+    else if (owner)
+    {
+        bool onQuest = false;
+        for (uint8 slot = 0; slot < MAX_QUEST_LOG_SIZE; ++slot)
+        {
+            if (owner->GetQuestSlotQuestId(slot))
+            {
+                onQuest = true;
+                break;
+            }
+        }
+        if (onQuest)
+        {
+            PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+                "event=QUESTING; map={}; owner={}", bot->GetMapId(), owner->GetName()));
+        }
+        else
+        {
+            PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+                "event=PARTY_BANTER; context=open_world; map={}", bot->GetMapId()));
+        }
+    }
+    else
+    {
+        PushSceneEventByEntry(bot->GetEntry(), "event=PARTY_BANTER; context=idle");
+    }
+}
+
 static std::string BuildBotChatTemplate(Creature const* bot, std::string_view channelHint);
+
+static std::string ExtractSceneEventField(std::string_view event, std::string_view key)
+{
+    std::string pattern = std::string(key) + "=";
+    size_t pos = event.find(pattern);
+    if (pos == std::string_view::npos)
+        return {};
+    pos += pattern.size();
+    size_t end = event.find(';', pos);
+    if (end == std::string_view::npos)
+        return std::string(event.substr(pos));
+    return std::string(event.substr(pos, end - pos));
+}
+
+static bool IsPlayerDirectedChatEvent(std::string_view event)
+{
+    return event.starts_with("event=PLAYER_CHAT") || event.starts_with("event=PLAYER_MENTION") ||
+        event.starts_with("event=PLAYER_WHISPER");
+}
+
+static bool LooksLikeSocialGreeting(std::string_view text)
+{
+    if (text.empty())
+        return false;
+    static std::string_view const keys[] =
+    {
+        "晚上好", "早上好", "下午好", "中午好", "你好", "大家好", "嗨", "哈喽", "hello", "hi",
+        "在吗", "睡了", "早安", "晚安", "好呀", "好啊"
+    };
+    for (std::string_view key : keys)
+    {
+        if (text.find(key) != std::string_view::npos)
+            return true;
+    }
+    return false;
+}
+
+static bool LooksLikeInternalPersonaPrompt(std::string_view text)
+{
+    return text.find("身份=魔兽老玩家") != std::string_view::npos ||
+        text.find("规则=仅中文") != std::string_view::npos ||
+        text.find("人格=") != std::string_view::npos;
+}
+
+static std::string PickPartySocialFallback(Creature const* bot, std::string_view playerText)
+{
+    if (LooksLikeSocialGreeting(playerText))
+    {
+        static std::string_view const greetLines[] =
+        {
+            "晚上好呀！",
+            "嗨，在呢。",
+            "嗯嗯，咋啦？",
+            "收到，队长~",
+            "好嘞，一起加油。"
+        };
+        return std::string(greetLines[bot->GetEntry() % std::size(greetLines)]);
+    }
+    static std::string_view const casualLines[] =
+    {
+        "哈哈行。",
+        "懂了懂了。",
+        "可以可以。",
+        "没问题，听你的。",
+        "行，我跟上。"
+    };
+    return std::string(casualLines[bot->GetEntry() % std::size(casualLines)]);
+}
 
 static bool IsBotChatGroupChannel(std::string_view channelName)
 {
@@ -427,12 +753,12 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     uint8 const winStreak = _botChatPvpWinStreak[bot->GetEntry()];
     uint8 const loseStreak = _botChatPvpLoseStreak[bot->GetEntry()];
 
-    std::string tacticalHint = "保持节奏";
+    std::string tacticalHint = "无";
     if (bot->IsInCombat() && channelHint == "小队频道")
         tacticalHint = "优先集火当前目标";
     else if (bot->IsInCombat() && channelHint == "团队频道")
         tacticalHint = "分散站位，注意Boss技能";
-    if (bot->GetMap()->IsBattleground())
+    else if (bot->GetMap()->IsBattleground())
         tacticalHint = "战场优先抱团推进点位，残血先撤并报点";
 
     std::string worldCall = "无";
@@ -445,7 +771,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     std::string channelStyle = "正常语气";
     if (channelHint == "打招呼")
     {
-        channelStyle = "路边偶遇真人玩家，可自然提到你刚给了对方职业辅助或buff，热情简短，像老玩家碰面";
+        channelStyle = "路边偶遇真人玩家，热情简短打招呼，可聊赶路或地图，禁止编造刚给过buff/技能/护盾";
     }
     else if (channelHint == "世界频道贸易")
     {
@@ -454,7 +780,58 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     else if (channelHint == "世界频道")
         channelStyle = "可轻度挑衅和阵营喊话，但不要低俗刷屏";
     else if (channelHint == "小队频道" || channelHint == "团队频道")
-        channelStyle = "以战术协作为主，语气克制";
+    {
+        if (bot->IsInCombat())
+            channelStyle = "战斗中简短报点，一句话";
+        else if (recentEvent.find("event=BOSS_PULL") != std::string::npos || recentEvent.find("event=BOSS_FIGHT") != std::string::npos)
+            channelStyle = "Boss战小队频道：可喊开战/注意技能/分散或打断，基于已知事件，禁止编造未发生的机制";
+        else if (recentEvent.find("event=COMBAT_PULL") != std::string::npos || recentEvent.find("event=COMBAT_ACTIVE") != std::string::npos)
+            channelStyle = "副本战斗中：简短报拉怪、集火或注意走位，口语自然";
+        else if (recentEvent.find("event=DUNGEON_PROGRESS") != std::string::npos)
+            channelStyle = "副本推进中：可聊路线、补给或下一波，像正常队伍";
+        else if (recentEvent.find("event=RAID_PROGRESS") != std::string::npos)
+            channelStyle = "团本推进：可聊Boss进度、分配或站位，简短自然";
+        else if (recentEvent.find("event=TRAVEL") != std::string::npos)
+            channelStyle = "赶路中闲聊：聊路线、坐骑或下一目标，语气轻松";
+        else if (recentEvent.find("event=QUESTING") != std::string::npos)
+            channelStyle = "做任务途中：可聊任务进度或附近怪点，像队友搭话";
+        else if (recentEvent.find("event=BOSS_CAST") != std::string::npos)
+            channelStyle = "Boss读条/施法预警：喊注意技能、躲圈或打断，基于事件不要编造";
+        else if (recentEvent.find("event=PARTY_BANTER") != std::string::npos)
+            channelStyle = "队友闲聊搭话，语气轻松自然，不要复读战术套话";
+        else if (IsPlayerDirectedChatEvent(recentEvent))
+        {
+            std::string const playerText = ExtractSceneEventField(recentEvent, "text");
+            std::string const speaker = ExtractSceneEventField(recentEvent, "speaker");
+            if (LooksLikeSocialGreeting(playerText))
+            {
+                channelStyle = Bcore::StringFormat(
+                    "队友{}在问候：「{}」，像朋友一样自然回招呼，可幽默，禁止复读「保持节奏」「稳住节奏」等打本套话",
+                    speaker.empty() ? "有人" : speaker, playerText.empty() ? "你好" : playerText);
+            }
+            else
+            {
+                channelStyle = Bcore::StringFormat(
+                    "队友{}说：「{}」，直接接这句话闲聊或回应，口语自然，禁止复读战术套话",
+                    speaker.empty() ? "有人" : speaker, playerText.empty() ? "..." : playerText);
+            }
+        }
+        else
+            channelStyle = "队友闲聊时可搭话，语气自然，不要复读战术套话";
+    }
+    else if (channelHint == "密语")
+    {
+        if (IsPlayerDirectedChatEvent(recentEvent))
+        {
+            std::string const playerText = ExtractSceneEventField(recentEvent, "text");
+            std::string const speaker = ExtractSceneEventField(recentEvent, "speaker");
+            channelStyle = Bcore::StringFormat(
+                "玩家{}密语：「{}」，像真人一样简短回应，不要复读打本节奏套话",
+                speaker.empty() ? "有人" : speaker, playerText.empty() ? "..." : playerText);
+        }
+        else
+            channelStyle = "密语闲聊，简短自然";
+    }
 
     std::string persona;
     if (!_botChatPersonaLoaded)
@@ -477,7 +854,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
             persona = Bcore::StringFormat(
                 "身份=魔兽老玩家;种族={};职业={};专精={};状态={};频道={};"
                 "事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};"
-                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
+                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,必须完整一句话并收束,尽量50-80字,绝不超100字,禁止编造未发生的技能或buff,只输出一句自然话。",
                 raceNameZh(ex->race), className, specName, action, channelHint,
                 recentEvent.empty() ? "无" : recentEvent,
                 uint32(winStreak), uint32(loseStreak),
@@ -489,7 +866,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         {
             persona = Bcore::StringFormat(
                 "身份=魔兽老玩家;状态={};频道={};事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};"
-                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
+                "语气={};规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,必须完整一句话并收束,尽量50-80字,绝不超100字,禁止编造未发生的技能或buff,只输出一句自然话。",
                 action, channelHint,
                 recentEvent.empty() ? "无" : recentEvent,
                 uint32(winStreak), uint32(loseStreak),
@@ -502,7 +879,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     {
         persona = Bcore::StringFormat(
             "人格={};状态={};频道={};事件={};PVP赢={};PVP输={};被谁打={};我打了谁={};战术={};语气={};"
-            "规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,尽量50-80字内并表达清楚,绝不超100字,只输出一句自然话。",
+            "规则=仅中文口语,真实玩家口吻,不可承认AI/机器人,必须完整一句话并收束,尽量50-80字,绝不超100字,禁止编造未发生的技能或buff,只输出一句自然话。",
             persona, action, channelHint,
             recentEvent.empty() ? "无" : recentEvent,
             uint32(winStreak), uint32(loseStreak),
@@ -520,10 +897,10 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
     {
         static std::string_view const greetLines[] =
         {
-            "嘿，需要个buff吗？",
-            "路过打个招呼，祝你好运！",
+            "嘿，路过打个招呼，祝你好运！",
             "嗨，冒险者，路上小心。",
-            "刚给你上了个辅助，有需要再喊我。"
+            "哟，忙着呢？需要帮忙喊一声。",
+            "刚路过，见你在附近，打个招呼。"
         };
         persona = std::string(greetLines[urand(0, std::size(greetLines) - 1)]);
     }
@@ -533,6 +910,18 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         if (!tradeLine.empty())
             persona = std::move(tradeLine);
     }
+    else if (LooksLikeInternalPersonaPrompt(persona))
+    {
+        if (channelHint == "小队频道" || channelHint == "团队频道" || channelHint == "密语")
+            persona = PickPartySocialFallback(bot, ExtractSceneEventField(recentEvent, "text"));
+        else if (channelHint == "世界频道")
+            persona = "有人在吗，一起刷刷？";
+        else
+            persona = "收到。";
+    }
+
+    if (LooksLikeRepetitiveBotLine(persona) || IsRepeatedBotChatLine(bot->GetEntry(), persona))
+        persona = PickNonRepeatingPartyLine(bot, channelHint);
 
     // By leewheel 20260528 - lightweight safe gate (Chinese + no politics).
     if (!LooksMostlyChinese(persona) || ContainsBlockedPoliticalTerms(persona))
@@ -551,17 +940,52 @@ static void SendBotMessageToGroup(Creature const* bot, Group const* group, bool 
         Player* member = itr->GetSource();
         if (!member || !member->GetSession())
             continue;
+        LocaleConstant const locale = member->GetSession()->GetSessionDbLocaleIndex();
+        std::string const displayName = BotDataMgr::GetNpcBotDisplayName(bot->GetEntry(), locale);
+
         WorldPackets::Chat::Chat packet;
         // CHAT_MSG_PARTY/RAID omit creature SenderName on 3.3.5 clients; MONSTER_PARTY includes it.
         if (isRaid)
         {
-            std::string const raidText = Bcore::StringFormat("{}：{}", bot->GetName(), cappedText);
-            packet.Initialize(CHAT_MSG_RAID, LANG_UNIVERSAL, bot, member, raidText);
+            std::string const raidText = Bcore::StringFormat("{}：{}", displayName, cappedText);
+            packet.Initialize(CHAT_MSG_RAID, LANG_UNIVERSAL, bot, member, raidText, 0, "", locale);
         }
         else
-            packet.Initialize(CHAT_MSG_MONSTER_PARTY, LANG_UNIVERSAL, bot, member, cappedText);
+        {
+            packet.Initialize(CHAT_MSG_MONSTER_PARTY, LANG_UNIVERSAL, bot, member, cappedText, 0, "", locale);
+            if (!displayName.empty())
+                packet.SenderName = displayName;
+        }
         member->SendDirectMessage(packet.Write());
     }
+}
+
+static void SendBotMessageToOwnerPlayer(Creature const* bot, Player const* owner, bool isRaid, std::string const& text)
+{
+    if (!bot || !owner)
+        return;
+
+    Player* recipient = ObjectAccessor::FindConnectedPlayer(owner->GetGUID());
+    if (!recipient || !recipient->GetSession())
+        return;
+
+    std::string const cappedText = LimitChineseReplyLength(text, 100);
+    LocaleConstant const locale = recipient->GetSession()->GetSessionDbLocaleIndex();
+    std::string const displayName = BotDataMgr::GetNpcBotDisplayName(bot->GetEntry(), locale);
+
+    WorldPackets::Chat::Chat packet;
+    if (isRaid)
+    {
+        std::string const raidText = Bcore::StringFormat("{}：{}", displayName, cappedText);
+        packet.Initialize(CHAT_MSG_RAID, LANG_UNIVERSAL, bot, recipient, raidText, 0, "", locale);
+    }
+    else
+    {
+        packet.Initialize(CHAT_MSG_MONSTER_PARTY, LANG_UNIVERSAL, bot, recipient, cappedText, 0, "", locale);
+        if (!displayName.empty())
+            packet.SenderName = displayName;
+    }
+    recipient->SendDirectMessage(packet.Write());
 }
 
 static void TryBotChannelChat(uint32 diff)
@@ -570,68 +994,40 @@ static void TryBotChannelChat(uint32 diff)
         return;
 
     _botChatTickerMs += diff;
-    if (_botChatTickerMs < 1000)
+    if (_botChatTickerMs < 500)
         return;
     _botChatTickerMs = 0;
 
-    // By leewheel 20260528 - GameTime::GetGameTimeMS already returns uint32 in this branch.
     uint32 const nowMs = GameTime::GetGameTimeMS();
     while (!_botChatGlobalSayMs.empty() && (nowMs - _botChatGlobalSayMs.front()) > 60000)
         _botChatGlobalSayMs.pop_front();
     if (_botChatGlobalSayMs.size() >= BotCfg::GetBotChatGlobalMaxPerMinute())
         return;
 
+    int32 bestPriority = 0;
     std::vector<Creature const*> candidates;
-    candidates.reserve(32);
-    // By leewheel 20260528 - prioritize bots that received nearby player chat events.
-    if (!_botChatDirectMentionEntries.empty())
+    candidates.reserve(48);
+    for (Creature const* bot : _existingBots)
     {
-        Creature const* firstMentionBot = nullptr;
-        size_t firstPos = std::numeric_limits<size_t>::max();
-        for (Creature const* bot : _existingBots)
+        if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
+            continue;
+
+        int32 const priority = GetBotChatCandidatePriority(bot, nowMs);
+        if (priority <= 0)
+            continue;
+
+        if (priority > bestPriority)
         {
-            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
-                continue;
-            if (!_botChatDirectMentionEntries.contains(bot->GetEntry()))
-                continue;
-            size_t const pos = _botChatDirectMentionFirstPosByEntry.contains(bot->GetEntry()) ?
-                _botChatDirectMentionFirstPosByEntry[bot->GetEntry()] : std::numeric_limits<size_t>::max();
-            if (pos < firstPos)
-            {
-                firstPos = pos;
-                firstMentionBot = bot;
-            }
+            bestPriority = priority;
+            candidates.clear();
         }
-        if (firstMentionBot)
-        {
-            candidates.push_back(firstMentionBot);
-        }
-    }
-    else if (!_botChatUrgentReplyEntries.empty())
-    {
-        for (Creature const* bot : _existingBots)
-        {
-            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
-                continue;
-            if (!_botChatUrgentReplyEntries.contains(bot->GetEntry()))
-                continue;
+        if (priority == bestPriority)
             candidates.push_back(bot);
-        }
     }
 
     if (candidates.empty())
-    {
-        for (Creature const* bot : _existingBots)
-        {
-            if (!bot || !bot->IsInWorld() || !bot->GetBotAI() || !bot->IsAlive())
-                continue;
-            if (_botChatCooldownUntilMs[bot->GetEntry()] > nowMs)
-                continue;
-            candidates.push_back(bot);
-        }
-    }
-    if (candidates.empty())
         return;
+
     Creature const* bot = candidates[urand(0, uint32(candidates.size() - 1))];
     bool const directMention = _botChatDirectMentionEntries.contains(bot->GetEntry());
     bool const urgentReply = _botChatUrgentReplyEntries.contains(bot->GetEntry());
@@ -641,6 +1037,10 @@ static void TryBotChannelChat(uint32 diff)
         ? _botChatUrgentMapByEntry[bot->GetEntry()] : bot->GetMapId();
     bool const urgentPartyChannel = urgentChannel == "小队频道";
     bool const urgentRaidChannel = urgentChannel == "团队频道";
+
+    Group const* chatGroup = ResolveBotChatGroup(bot);
+    Player const* squadOwner = nullptr;
+    bool const hasSquad = BotHasHiredSquad(bot, &squadOwner);
     std::string_view channelHint = "世界频道";
     if (urgentPartyChannel)
         channelHint = "小队频道";
@@ -648,13 +1048,19 @@ static void TryBotChannelChat(uint32 diff)
         channelHint = "团队频道";
     else if (urgentReply && !urgentChannel.empty())
         channelHint = "频道回复";
-    // By leewheel 20260528 - active chat also carries channel hint prompt (world/party/raid).
-    if (bot_ai const* ai = bot->GetBotAI(); ai && !urgentReply)
+    else if (chatGroup)
+        channelHint = chatGroup->isRaidGroup() ? "团队频道" : "小队频道";
+    else if (hasSquad && squadOwner)
     {
-        if (Group const* group = ai->GetGroup())
-            channelHint = group->isRaidGroup() ? "团队频道" : "小队频道";
+        Group const* squadGroup = LookupPlayerGroupSafe(const_cast<Player*>(squadOwner));
+        channelHint = (squadGroup && squadGroup->isRaidGroup()) ? "团队频道" : "小队频道";
     }
-    // By leewheel 20260529 - world-channel trade shout (whisper negotiate + COD mail only).
+    else if (bot->IsWandererBot() && BotChatMapHasPlayers(bot))
+        channelHint = "世界频道";
+
+    if ((channelHint == "小队频道" || channelHint == "团队频道") && !urgentReply && !HasPendingSceneEvent(bot->GetEntry()))
+        SeedProactivePartySceneEvent(bot);
+
     if (bot->IsWandererBot() && !urgentReply && channelHint == "世界频道" && WandererVendor::WantsTradeWorldShout(bot))
     {
         std::string tradeEv = WandererVendor::BuildTradeSceneEvent(bot);
@@ -662,16 +1068,50 @@ static void TryBotChannelChat(uint32 diff)
             PushSceneEventByEntry(bot->GetEntry(), tradeEv);
         channelHint = "世界频道贸易";
     }
+
     std::string msg = LimitChineseReplyLength(BuildBotChatTemplate(bot, channelHint), 100);
+    if (msg.empty() || IsRepeatedBotChatLine(bot->GetEntry(), msg) || LooksLikeRepetitiveBotLine(msg))
+    {
+        msg = PickNonRepeatingPartyLine(bot, channelHint);
+        if (msg.empty())
+            return;
+    }
 
     bool sent = false;
-    // By leewheel 20260528 - channel policy:
-    // 1) urgent player-triggered reply -> same player channel
-    // 2) autonomous talk -> wanderers only, and world channel only
-    bool const preferWorld = BotCfg::IsBotChatWorldEnabled() && (bot->IsWandererBot() || (urgentReply && !urgentPartyChannel && !urgentRaidChannel));
-    if (preferWorld)
+    bool const partyChannel = (channelHint == "小队频道" || channelHint == "团队频道");
+    bool const isRaidChannel = channelHint == "团队频道";
+
+    if (partyChannel && chatGroup)
     {
-        // Creature cannot truly join channel list; we emulate world by broadcasting a channel packet to visible map players.
+        if (chatGroup->isRaidGroup() && BotCfg::IsBotChatRaidEnabled())
+        {
+            SendBotMessageToGroup(bot, chatGroup, true, msg);
+            sent = true;
+        }
+        else if (BotCfg::IsBotChatPartyEnabled())
+        {
+            SendBotMessageToGroup(bot, chatGroup, false, msg);
+            sent = true;
+        }
+    }
+    else if (partyChannel && hasSquad && squadOwner)
+    {
+        if (isRaidChannel && BotCfg::IsBotChatRaidEnabled())
+        {
+            SendBotMessageToOwnerPlayer(bot, squadOwner, true, msg);
+            sent = true;
+        }
+        else if (BotCfg::IsBotChatPartyEnabled())
+        {
+            SendBotMessageToOwnerPlayer(bot, squadOwner, false, msg);
+            sent = true;
+        }
+    }
+
+    bool const allowWorldAutonomous = BotCfg::IsBotChatWorldEnabled() && BotChatMapHasPlayers(bot) &&
+        (bot->IsWandererBot() || urgentReply || !partyChannel);
+    if (!sent && allowWorldAutonomous && !partyChannel)
+    {
         std::string const outChannel = (!urgentChannel.empty() ? urgentChannel : BotCfg::GetBotChatWorldChannelName());
         Map* outMap = sMapMgr->CreateBaseMap(urgentMapId);
         if (!outMap)
@@ -685,87 +1125,26 @@ static void TryBotChannelChat(uint32 diff)
             packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, msg, 0, outChannel);
             player->SendDirectMessage(packet.Write());
         }
-        sent = true;
-    }
-
-    // By leewheel 20260528 - avoid stale owner->GetGroup() pointer crash; use bot AI's GroupReference target.
-    if (!sent)
-    {
-        if (bot_ai const* ai = bot->GetBotAI())
-        {
-            if (Group const* group = ai->GetGroup())
-            {
-                if (group->isRaidGroup() && BotCfg::IsBotChatRaidEnabled())
-                {
-                    SendBotMessageToGroup(bot, group, true, msg);
-                    sent = true;
-                }
-                else if (BotCfg::IsBotChatPartyEnabled())
-                {
-                    SendBotMessageToGroup(bot, group, false, msg);
-                    sent = true;
-                }
-            }
-        }
-    }
-
-    if (!sent && BotCfg::IsBotChatWorldEnabled() && (bot->IsWandererBot() || (urgentReply && !urgentPartyChannel && !urgentRaidChannel)))
-    {
-        // No dedicated channel membership for creatures in core; broadcast to nearby players as world-like global text packet.
-        for (MapReference const& ref : bot->GetMap()->GetPlayers())
-        {
-            Player* player = ref.GetSource();
-            if (!player || !player->GetSession())
-                continue;
-            WorldPackets::Chat::Chat packet;
-            packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, msg, 0, BotCfg::GetBotChatWorldChannelName());
-            player->SendDirectMessage(packet.Write());
-        }
-        sent = true;
-
-        // By leewheel 20260528 - world chat echo via LLM context, not fixed canned lines.
-        Creature const* echoBot = nullptr;
-        for (Creature const* candidate : candidates)
-        {
-            if (candidate == bot || candidate->GetMapId() != bot->GetMapId())
-                continue;
-            if (_botChatCooldownUntilMs[candidate->GetEntry()] > nowMs)
-                continue;
-            if (candidate->GetExactDist2d(bot) > 120.0f)
-                continue;
-            echoBot = candidate;
-            break;
-        }
-        if (echoBot)
-        {
-            PushSceneEventByEntry(echoBot->GetEntry(), Bcore::StringFormat("event=WORLD_ECHO; source={}; intent=support", bot->GetName()));
-            std::string echoMsg = LimitChineseReplyLength(BuildBotChatTemplate(echoBot, "世界频道"), 100);
-            if (echoMsg.empty())
-                echoMsg = "收到，马上过去";
-            for (MapReference const& ref : bot->GetMap()->GetPlayers())
-            {
-                Player* player = ref.GetSource();
-                if (!player || !player->GetSession())
-                    continue;
-                WorldPackets::Chat::Chat packet;
-                packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, echoBot, nullptr, echoMsg, 0, BotCfg::GetBotChatWorldChannelName());
-                player->SendDirectMessage(packet.Write());
-            }
-            _botChatCooldownUntilMs[echoBot->GetEntry()] = nowMs + std::max<uint32>(BotCfg::GetBotChatBotCooldownMs(), 45000u);
-            _botChatGlobalSayMs.push_back(nowMs);
-        }
+        sent = outMap && outMap->HavePlayers();
     }
 
     if (sent)
     {
+        RememberBotChatLine(bot->GetEntry(), msg);
         _botChatUrgentReplyEntries.erase(bot->GetEntry());
         _botChatDirectMentionEntries.erase(bot->GetEntry());
         _botChatDirectMentionFirstPosByEntry.erase(bot->GetEntry());
         _botChatUrgentChannelByEntry.erase(bot->GetEntry());
         _botChatUrgentMapByEntry.erase(bot->GetEntry());
         _botChatGlobalSayMs.push_back(nowMs);
-        uint32 const next = urand(BotCfg::GetBotChatIntervalMinMs(), BotCfg::GetBotChatIntervalMaxMs());
-        _botChatCooldownUntilMs[bot->GetEntry()] = directMention ? (nowMs + 5000u) : (nowMs + std::max(next, BotCfg::GetBotChatBotCooldownMs()));
+
+        uint32 nextCooldown = urand(BotCfg::GetBotChatIntervalMinMs(), BotCfg::GetBotChatIntervalMaxMs());
+        if (partyChannel || bot->IsInCombat())
+            nextCooldown = std::min(nextCooldown, 12000u);
+        if (directMention)
+            nextCooldown = 4000u;
+
+        _botChatCooldownUntilMs[bot->GetEntry()] = nowMs + std::max(nextCooldown, partyChannel ? 5000u : BotCfg::GetBotChatBotCooldownMs());
     }
 }
 
@@ -1856,6 +2235,83 @@ void BotDataMgr::PushBotChatSceneEvent(Creature const* bot, std::string_view eve
     PushSceneEventByEntry(bot->GetEntry(), eventText);
 }
 
+void BotDataMgr::NotifyBotCombatScene(Creature const* bot, Unit const* target)
+{
+    if (!BotCfg::IsBotChatEnabled() || !bot || !target || !bot->GetBotAI() || bot->GetBotAI()->IAmFree())
+        return;
+    if (!ResolveBotChatGroup(bot) && !BotHasHiredSquad(bot))
+        return;
+
+    bool const boss = target->IsCreature() && target->ToCreature()->IsDungeonBoss();
+    PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+        "event={}; target={}; map={}; hp_pct={}",
+        boss ? "BOSS_PULL" : "COMBAT_PULL",
+        target->GetName(), bot->GetMapId(), uint32(target->GetHealthPct())));
+
+    _botChatUrgentReplyEntries.insert(bot->GetEntry());
+    _botChatUrgentChannelByEntry[bot->GetEntry()] = "小队频道";
+    _botChatUrgentMapByEntry[bot->GetEntry()] = bot->GetMapId();
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& cd = _botChatCooldownUntilMs[bot->GetEntry()];
+    if (cd > nowMs + 4000)
+        cd = nowMs + urand(1500, 4000);
+}
+
+void BotDataMgr::NotifyBotCastScene(Creature const* bot, Unit const* caster, uint32 spellId)
+{
+    if (!BotCfg::IsBotChatEnabled() || !bot || !caster || !spellId || !bot->GetBotAI() || bot->GetBotAI()->IAmFree())
+        return;
+    if (!ResolveBotChatGroup(bot) && !BotHasHiredSquad(bot))
+        return;
+
+    SpellInfo const* spellInfo = sSpellMgr->GetSpellInfo(spellId);
+    if (!spellInfo)
+        return;
+
+    bool const boss = caster->IsCreature() && caster->ToCreature()->IsDungeonBoss();
+    if (!boss && !caster->IsInCombatWith(bot))
+        return;
+
+    PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+        "event=BOSS_CAST; caster={}; spell={}; map={}",
+        caster->GetName(), spellInfo->SpellName[0], bot->GetMapId()));
+
+    _botChatUrgentReplyEntries.insert(bot->GetEntry());
+    _botChatUrgentChannelByEntry[bot->GetEntry()] = bot->GetMap() && bot->GetMap()->IsRaid() ? "团队频道" : "小队频道";
+    _botChatUrgentMapByEntry[bot->GetEntry()] = bot->GetMapId();
+
+    uint32 const nowMs = GameTime::GetGameTimeMS();
+    uint32& cd = _botChatCooldownUntilMs[bot->GetEntry()];
+    if (cd > nowMs + 3000)
+        cd = nowMs + urand(800, 2500);
+}
+
+void BotDataMgr::UpdateBotAmbientChat(Creature* bot, uint32 diff)
+{
+    if (!BotCfg::IsBotChatEnabled() || !bot || !bot->IsInWorld() || !bot->GetBotAI() || bot->GetBotAI()->IAmFree())
+        return;
+    if (!ResolveBotChatGroup(bot) && !BotHasHiredSquad(bot))
+        return;
+
+    uint32 const entry = bot->GetEntry();
+    uint32& timer = _botAmbientChatTimerMs[entry];
+    if (timer > diff)
+    {
+        timer -= diff;
+        return;
+    }
+
+    timer = urand(12000, 28000);
+    if (bot->IsInCombat())
+        timer = urand(6000, 14000);
+
+    if (HasPendingSceneEvent(entry))
+        return;
+
+    SeedProactivePartySceneEvent(bot);
+}
+
 void BotDataMgr::PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName)
 {
     if (!bot || killerName.empty())
@@ -1970,6 +2426,9 @@ void BotDataMgr::OnPlayerChannelChat(Player const* player, std::string_view chan
         _botChatUrgentMapByEntry[bot->GetEntry()] = player->GetMapId();
         _botChatCooldownUntilMs[bot->GetEntry()] = 0;
     }
+
+    if (groupChannel && !mentionedBots.empty())
+        return;
 
     // By leewheel 20260528 - player channel messages seed nearby bot reply context (city/world immersion).
     uint32 seeded = 0;
@@ -3218,11 +3677,25 @@ void BotDataMgr::GenerateDungeonBots(Player const* leader, Group const* group, M
     if (!group->isLFGGroup())
         return;
 
-    // By leewheel 20260528 - count players + already-grouped hired bots (do not over-spawn LFG fillers)
+    // Group::GetMembersCount() already includes NPCBots added via AddMember(Creature).
+    // Do not also iterate GetFirstBotMember() — that double-counts and breaks fill math.
     uint32 party_slots_used = group->GetMembersCount();
-    for (GroupBotReference const* itr = group->GetFirstBotMember(); itr != nullptr; itr = itr->next())
-        if (itr->GetSource())
-            ++party_slots_used;
+
+    // LFG fillers may exist on a member's BotMgr before group membership is linked.
+    for (GroupReference const* itr = group->GetFirstMember(); itr != nullptr; itr = itr->next())
+    {
+        Player const* member = itr->GetSource();
+        if (!member || !member->HaveBot())
+            continue;
+
+        for (auto const& [guid, bot] : *member->GetBotMgr()->GetBotMap())
+        {
+            if (!bot || !bot->IsSummon() || group->IsMember(guid))
+                continue;
+            if (IsServiceHireSource(GetNpcBotHireSource(bot->GetEntry())))
+                ++party_slots_used;
+        }
+    }
 
     if (party_slots_used >= MAX_GROUP_SIZE)
         return;
@@ -3230,7 +3703,6 @@ void BotDataMgr::GenerateDungeonBots(Player const* leader, Group const* group, M
     const uint32 bots_to_generate_count = static_cast<uint32>(MAX_GROUP_SIZE) - party_slots_used;
     if (!bots_to_generate_count)
         return;
-    // end By leewheel 20260528
 
     BOT_LOG_INFO("npcbots", "DungeonBots: player: {} ({}), map '{}', party slots: {}, bots to generate: {}",
         leader->GetName(), leader->GetGUID().GetCounter(), map->GetId(), party_slots_used, bots_to_generate_count);
@@ -4949,6 +5421,32 @@ std::string_view BotDataMgr::GetNpcBotAppearanceName(uint32 entry)
             return appData->name;
 
     return {};
+}
+
+std::string BotDataMgr::GetNpcBotDisplayName(uint32 entry, LocaleConstant locale)
+{
+    CreatureTemplate const* creatureTemplate = sObjectMgr->GetCreatureTemplate(entry);
+    if (!creatureTemplate)
+        return {};
+
+    std::string_view creatureName = creatureTemplate->Name;
+
+    // Runtime-generated wanderers/dungeon bots: appearance table name (see QueryHandler).
+    if (CreatureTemplate const* extraTemplate = GetBotExtraCreatureTemplate(entry))
+    {
+        if (std::string_view appName = GetNpcBotAppearanceName(entry); !appName.empty())
+            creatureName = appName;
+        else if (uint32 const origEntry = extraTemplate->KillCredit[0])
+            if (std::string_view origName = GetNpcBotAppearanceName(origEntry); !origName.empty())
+                creatureName = origName;
+    }
+    else if (CreatureLocale const* creatureInfo = sObjectMgr->GetCreatureLocale(entry))
+    {
+        if (creatureInfo->Name.size() > locale && !creatureInfo->Name[locale].empty() && Utf8FitTo(creatureInfo->Name[locale], {}))
+            creatureName = creatureInfo->Name[locale];
+    }
+
+    return std::string(creatureName);
 }
 
 NpcBotExtras const* BotDataMgr::SelectNpcBotExtras(uint32 entry)

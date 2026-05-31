@@ -19,6 +19,7 @@
 #include "Group.h"
 #include "InstanceScript.h"
 #include "Language.h"
+#include "LFGMgr.h"
 #include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
@@ -190,6 +191,8 @@ void BotMgr::Update(uint32 diff)
 
     if (!HaveBot())
         return;
+
+    TryDismissStaleLfgServiceBots();
 
     //ObjectGuid guid;
     bool partyCombat = IsPartyInCombat(false);
@@ -771,7 +774,7 @@ void BotMgr::RemoveAllSummonedBots()
     }
 }
 
-// By leewheel 20260528 - remove LFG temp bots on dungeon leave; do not dismiss normally hired bots
+// By leewheel 20260528 - remove LFG service bots on dungeon leave; keep quick-group / normal hires
 void BotMgr::RemoveLfgServiceBots()
 {
     if (_bots.empty())
@@ -781,15 +784,44 @@ void BotMgr::RemoveLfgServiceBots()
     lfg_bots.reserve(_bots.size());
     for (auto const& [guid, bot] : _bots)
     {
-        if (!bot->IsSummon() || bot->IsTempBot())
-            continue;
-        if (!IsServiceHireSource(BotDataMgr::GetNpcBotHireSource(bot->GetEntry())))
+        if (BotDataMgr::GetNpcBotHireSource(bot->GetEntry()) != NPCBOT_HIRE_LFG)
             continue;
         lfg_bots.push_back(guid);
     }
 
     for (ObjectGuid guid : lfg_bots)
-        RemoveBot(guid, BOT_REMOVE_UNSUMMON);
+    {
+        Creature* bot = GetBot(guid);
+        if (bot)
+            sLFGMgr->RemoveDungeonFinderBotFromList(bot);
+        RemoveBot(guid, bot && bot->IsSummon() ? BOT_REMOVE_UNSUMMON : BOT_REMOVE_DISMISS);
+    }
+}
+
+void BotMgr::TryDismissStaleLfgServiceBots()
+{
+    if (_bots.empty() || !_owner)
+        return;
+
+    bool hasLfgBot = false;
+    for (auto const& [guid, bot] : _bots)
+    {
+        if (BotDataMgr::GetNpcBotHireSource(bot->GetEntry()) == NPCBOT_HIRE_LFG)
+        {
+            hasLfgBot = true;
+            break;
+        }
+    }
+    if (!hasLfgBot)
+        return;
+
+    Group* group = _owner->GetGroup();
+    lfg::LfgState lfgState = group ? sLFGMgr->GetState(group->GetGUID()) : lfg::LFG_STATE_NONE;
+    bool const inActiveLfgDungeon = _owner->GetMap() && _owner->GetMap()->IsDungeon() && group &&
+        group->isLFGGroup() && (lfgState == lfg::LFG_STATE_DUNGEON || lfgState == lfg::LFG_STATE_FINISHED_DUNGEON);
+
+    if (!inActiveLfgDungeon)
+        RemoveLfgServiceBots();
 }
 // end By leewheel 20260528
 
@@ -919,7 +951,7 @@ BotAddResult BotMgr::AddBot(Creature* bot)
 }
 
 // By leewheel 20260523 - optional hire cost (quick group uses false)
-BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost)
+BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost, bool addToGroup)
 {
     ASSERT(bot->IsNPCBot());
     ASSERT(bot->GetBotAI() != nullptr);
@@ -1025,7 +1057,7 @@ BotAddResult BotMgr::AddBotEx(Creature* bot, bool chargeHireCost)
         }
 
         bot->GetBotAI()->SetBotCommandState(BOT_COMMAND_FOLLOW, true);
-        if (bot->GetBotAI()->HasRole(BOT_ROLE_PARTY))
+        if (addToGroup && !bot->GetBotAI()->IsTempBot())
             AddBotToGroup(bot);
     }
 
@@ -2268,8 +2300,76 @@ void BotMgr::SetRandomBotTalentsForGroup(Creature const* bot, uint32 botrole)
     uint8 spec = BotDataMgr::SelectBotSpecForRoles(bot->GetBotClass(), botrole);
     ai->SetSpec(spec, true);
 
+    if (botrole == BOT_ROLE_HEAL)
+    {
+        if (Player* owner = ai->GetBotOwner())
+        {
+            if (BotMgr* mgr = owner->GetBotMgr())
+            {
+                if (mgr->GetBotAttackRangeMode() == BOT_ATTACK_RANGE_SHORT)
+                    mgr->SetBotAttackRangeMode(BOT_ATTACK_RANGE_LONG);
+                if (mgr->GetBotFollowDist() < 30)
+                    mgr->SetBotFollowDist(30);
+            }
+        }
+    }
+
     ApplyServiceBotDefaultAutoloot(const_cast<Creature*>(bot));
 }
+
+// By leewheel 20260530 - LFG random dungeon helpers (LWCorePlus style)
+bool BotMgr::PlayerIsMainTank(Player const* player)
+{
+    if (!player)
+        return false;
+    return (sLFGMgr->GetRoles(player->GetGUID()) & lfg::PLAYER_ROLE_TANK) != 0;
+}
+
+bool BotMgr::PlayerIsHealer(Player const* player)
+{
+    if (!player)
+        return false;
+    return (sLFGMgr->GetRoles(player->GetGUID()) & lfg::PLAYER_ROLE_HEALER) != 0;
+}
+
+void BotMgr::CountBotsTowardPartyRoles(BotMap const* botMap, uint8& tanksNeeded, uint8& healersNeeded, uint8& dpsNeeded, uint8* botsToHire)
+{
+    if (!botMap)
+        return;
+
+    for (auto const& [guid, bot] : *botMap)
+    {
+        if (!bot || !bot->GetBotAI())
+            continue;
+
+        if (BotDataMgr::GetNpcBotHireSource(bot->GetEntry()) == NPCBOT_HIRE_LFG)
+            continue;
+
+        uint32 const roleMask = bot->GetBotAI()->GetBotRoles();
+
+        if ((roleMask & BOT_ROLE_TANK) && tanksNeeded > 0)
+        {
+            --tanksNeeded;
+            if (botsToHire)
+                --(*botsToHire);
+            continue;
+        }
+        if ((roleMask & BOT_ROLE_HEAL) && healersNeeded > 0)
+        {
+            --healersNeeded;
+            if (botsToHire)
+                --(*botsToHire);
+            continue;
+        }
+        if ((roleMask & BOT_ROLE_DPS) && dpsNeeded > 0)
+        {
+            --dpsNeeded;
+            if (botsToHire)
+                --(*botsToHire);
+        }
+    }
+}
+// end By leewheel 20260530
 
 // By leewheel 20260523
 BotAddResult BotMgr::AddServiceBot(Creature* bot, uint32 botRole)

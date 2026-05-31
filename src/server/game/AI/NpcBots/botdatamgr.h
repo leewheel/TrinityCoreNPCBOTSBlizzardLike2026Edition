@@ -221,6 +221,9 @@ public:
     static void UpdateWandererGridRecycle(uint32 diff);
     static void TryReplenishWanderingBots();
     static void PushBotChatSceneEvent(Creature const* bot, std::string_view eventText);
+    static void NotifyBotCombatScene(Creature const* bot, Unit const* target);
+    static void NotifyBotCastScene(Creature const* bot, Unit const* caster, uint32 spellId);
+    static void UpdateBotAmbientChat(Creature* bot, uint32 diff);
     static void PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName);
     static void PushBotChatPvpKillEvent(Creature const* bot, std::string_view victimName);
     static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message, Group const* group = nullptr);
@@ -255,6 +258,8 @@ public:
 
     static NpcBotAppearanceData const* SelectNpcBotAppearance(uint32 entry);
     static std::string_view GetNpcBotAppearanceName(uint32 entry);
+    // Same rules as SMSG_NAME_QUERY for npcbots (party frame / inspect name).
+    static std::string GetNpcBotDisplayName(uint32 entry, LocaleConstant locale);
     static NpcBotExtras const* SelectNpcBotExtras(uint32 entry);
 
     static NpcBotTransmogData const* SelectNpcBotTransmogs(uint32 entry);
