@@ -3927,6 +3927,150 @@ bool IsEnemyFleeing(Unit const* unit)
 
     return false;
 }
+
+constexpr float BOSS_ADD_MAX_DIST_FROM_BOSS = 80.f;
+
+bool IsInstanceBossCreature(Creature const* creature)
+{
+    return creature && creature->IsAlive() && (creature->IsDungeonBoss() || creature->isWorldBoss());
+}
+
+bool IsInCombatWithBotParty(Creature const* cre, Player const* owner, Group const* group)
+{
+    if (!cre || !owner)
+        return false;
+
+    if (cre->IsInCombatWith(owner))
+        return true;
+
+    if (group)
+    {
+        for (GroupReference const* ref = group->GetFirstMember(); ref; ref = ref->next())
+        {
+            if (Player const* member = ref->GetSource())
+                if (cre->IsInCombatWith(member))
+                    return true;
+        }
+    }
+
+    return false;
+}
+
+Creature const* ResolveActiveInstanceBoss(Unit const* ref, Unit const* mytar, Player const* owner, std::list<Unit*> const& hostiles, float range)
+{
+    if (mytar)
+    {
+        if (Creature const* creature = mytar->ToCreature())
+            if (IsInstanceBossCreature(creature) && creature->IsInCombat())
+                return creature;
+    }
+
+    if (owner)
+    {
+        if (Unit const* victim = owner->GetVictim())
+        {
+            if (Creature const* creature = victim->ToCreature())
+                if (IsInstanceBossCreature(creature) && creature->IsInCombat())
+                    return creature;
+        }
+    }
+
+    Creature const* best = nullptr;
+    float bestDist = range;
+    for (Unit const* unit : hostiles)
+    {
+        Creature const* creature = unit->ToCreature();
+        if (!IsInstanceBossCreature(creature) || !creature->IsInCombat())
+            continue;
+
+        float const dist = ref->GetDistance(creature);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = creature;
+        }
+    }
+
+    return best;
+}
+
+bool IsBossSpawnedAdd(Creature const* cre, Creature const* boss, Player const* owner, Group const* group)
+{
+    if (!cre || !boss || cre == boss)
+        return false;
+
+    if (IsInstanceBossCreature(cre))
+        return false;
+
+    if (!cre->IsAlive() || !cre->IsInCombat())
+        return false;
+
+    if (cre->IsCritter() || cre->IsTrigger() || cre->IsControlledByPlayer())
+        return false;
+
+    if (cre->GetDistance(boss) > BOSS_ADD_MAX_DIST_FROM_BOSS)
+        return false;
+
+    if (!IsInCombatWithBotParty(cre, owner, group))
+        return false;
+
+    ObjectGuid const bossGuid = boss->GetGUID();
+    if (!cre->GetOwnerGUID().IsEmpty() && cre->GetOwnerGUID() == bossGuid)
+        return true;
+    if (cre->GetCreatorGUID() == bossGuid)
+        return true;
+    if (cre->GetCharmerGUID() == bossGuid)
+        return true;
+    if (TempSummon const* summon = cre->ToTempSummon())
+        if (summon->GetSummonerGUID() == bossGuid)
+            return true;
+
+    if (cre->IsSummon())
+        return true;
+
+    if (cre->GetMaxHealth() < boss->GetMaxHealth())
+        return true;
+
+    return false;
+}
+
+Unit* SelectPriorityBossAdd(bot_ai const* ai, Unit const* ref, Creature const* boss, Player const* owner, Group const* group,
+    std::list<Unit*> const& hostiles, bool preferUntanked, int8 byspell)
+{
+    Unit* best = nullptr;
+    float bestDist = 200.f;
+
+    for (Unit* unit : hostiles)
+    {
+        Creature* cre = unit->ToCreature();
+        if (!cre || !IsBossSpawnedAdd(cre, boss, owner, group))
+            continue;
+
+        if (!ai->CanBotAttack(unit, byspell))
+            continue;
+
+        if (preferUntanked)
+        {
+            if (Unit* victim = cre->GetVictim())
+            {
+                if (victim->GetGUID() == ref->GetGUID())
+                    return unit;
+
+                if (ai->IsTank(victim) && !ai->IsOffTank(victim))
+                    continue;
+            }
+        }
+
+        float const dist = ref->GetDistance(unit);
+        if (dist < bestDist)
+        {
+            bestDist = dist;
+            best = unit;
+        }
+    }
+
+    return best;
+}
 }
 // end By leewheel 20260523
 
@@ -4533,6 +4677,33 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
                 reset = true;
             return { fleeingTarget, fleeingTarget };
         }
+
+        // By leewheel 20260531 - instance boss adds: DPS burn adds; raid off-tank picks them up
+        Map const* instanceMap = me->GetMap();
+        if (instanceMap && instanceMap->Instanceable())
+        {
+            bool const isRaid = instanceMap->IsRaid();
+            bool const isDungeon = instanceMap->IsDungeon() && !isRaid;
+
+            if (isRaid || isDungeon)
+            {
+                Creature const* boss = ResolveActiveInstanceBoss(me, mytar, master, unitList, BOSS_ADD_MAX_DIST_FROM_BOSS * 2.f);
+                if (boss)
+                {
+                    bool const wantAdd = (isRaid && IsOffTank()) || (HasRole(BOT_ROLE_DPS) && !IsTank());
+                    if (wantAdd)
+                    {
+                        if (Unit* add = SelectPriorityBossAdd(this, me, boss, master, gr, unitList, isRaid && IsOffTank(), byspell))
+                        {
+                            if (!mytar || mytar != add)
+                                reset = true;
+                            return { add, add };
+                        }
+                    }
+                }
+            }
+        }
+        // end By leewheel 20260531
     }
     // end By leewheel 20260523
 
