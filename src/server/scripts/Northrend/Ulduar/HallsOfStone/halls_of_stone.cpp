@@ -16,6 +16,7 @@
  */
 
 #include "ScriptMgr.h"
+#include "GameObject.h"
 #include "halls_of_stone.h"
 #include "InstanceScript.h"
 #include "ObjectAccessor.h"
@@ -261,6 +262,10 @@ struct npc_tribuna_controller : public ScriptedAI
 };
 
 static constexpr uint32 PATH_ESCORT_BRANN = 224562;
+static constexpr uint32 PATH_SJONNIR_DOOR = 224563;
+static constexpr uint32 PATH_SJONNIR_ROOM = 224564;
+
+Position const BrannSjonnirTelePos = {1199.8f, 667.138f, 196.242f, 3.12967f};
 
 struct npc_brann_hos : public EscortAI
 {
@@ -278,6 +283,8 @@ struct npc_brann_hos : public EscortAI
         uiPhaseTimer = 0;
         uiControllerGUID.Clear();
         brannSparklinNews = true;
+        _sjonnirDoorOpened = false;
+        _sjonnirPhase = 0;
     }
 
     uint32 uiStep;
@@ -291,6 +298,8 @@ struct npc_brann_hos : public EscortAI
     bool bIsBattle;
     bool bIsLowHP;
     bool brannSparklinNews;
+    bool _sjonnirDoorOpened;
+    uint8 _sjonnirPhase; // 0=none, 1=waiting at door, 2=in room, 3=post-victory
 
     void Reset() override
     {
@@ -317,8 +326,23 @@ struct npc_brann_hos : public EscortAI
         lDwarfGUIDList.clear();
     }
 
-    void WaypointReached(uint32 waypointId, uint32 /*pathId*/) override
+    void WaypointReached(uint32 waypointId, uint32 pathId) override
     {
+        // Handle Sjonnir section paths
+        if (pathId == PATH_SJONNIR_DOOR && waypointId == 16)
+        {
+            _sjonnirPhase = 1;
+            me->SetNpcFlag(UNIT_NPC_FLAG_GOSSIP);
+            SetEscortPaused(true);
+            return;
+        }
+        if (pathId == PATH_SJONNIR_ROOM && waypointId == 6)
+        {
+            _sjonnirPhase = 2;
+            SetEscortPaused(true);
+            return;
+        }
+
         switch (waypointId)
         {
             case 7:
@@ -335,7 +359,6 @@ struct npc_brann_hos : public EscortAI
                 instance->SetBossState(DATA_TRIBUNAL_OF_AGES, IN_PROGRESS);
                 SetEscortPaused(true);
                 JumpToNextStep(20000);
-                // @todo: There should be a pause here and a gossip should start the next step.
                 break;
             case 17:
                 Talk(SAY_EVENT_INTRO_2);
@@ -356,7 +379,7 @@ struct npc_brann_hos : public EscortAI
        {
            case 1:
            {
-               uint32 uiSpawnNumber = DUNGEON_MODE(2, 3);
+               uint32 uiSpawnNumber = IsHeroic() ? 3 : 2;
                for (uint8 i = 0; i < uiSpawnNumber; ++i)
                    me->SummonCreature(NPC_DARK_RUNE_PROTECTOR, SpawnLocations[0], TEMPSUMMON_CORPSE_TIMED_DESPAWN, 30s);
                me->SummonCreature(NPC_DARK_RUNE_STORMCALLER, SpawnLocations[0], TEMPSUMMON_CORPSE_TIMED_DESPAWN, 30s);
@@ -406,6 +429,16 @@ struct npc_brann_hos : public EscortAI
             return brannSparklinNews ? 1 : 0;
 
         return 0;
+    }
+
+    void DoAction(int32 action) override
+    {
+        if (action == 1) // Sjonnir killed
+        {
+            _sjonnirPhase = 3;
+            uiStep = 60;
+            uiPhaseTimer = 3000;
+        }
     }
 
     void UpdateEscortAI(uint32 uiDiff) override
@@ -659,6 +692,36 @@ struct npc_brann_hos : public EscortAI
                 case 50:
                     SetEscortPaused(false);
                     break;
+                // Sjonnir section
+                case 51:
+                    // Brann walks to Sjonnir door via path
+                    _sjonnirPhase = 1;
+                    me->SetWalk(true);
+                    me->GetMotionMaster()->MovePath(PATH_SJONNIR_DOOR, false);
+                    break;
+                case 55:
+                    // Brann opens Sjonnir door
+                    if (GameObject* door = me->FindNearestGameObject(GO_SJONNIR_DOOR, 50.0f))
+                        door->SetGoState(GO_STATE_ACTIVE);
+                    _sjonnirDoorOpened = true;
+                    _sjonnirPhase = 2;
+                    me->SetWalk(true);
+                    me->GetMotionMaster()->MovePath(PATH_SJONNIR_ROOM, false);
+                    break;
+                // Sjonnir killed - victory sequence (triggered by DoAction)
+                case 60:
+                    Talk(SAY_VICTORY_SJONNIR_1);
+                    JumpToNextStep(5000);
+                    break;
+                case 61:
+                    Talk(SAY_VICTORY_SJONNIR_2);
+                    JumpToNextStep(3000);
+                    break;
+                case 62:
+                    me->SetNpcFlag(UNIT_NPC_FLAG_QUESTGIVER);
+                    if (instance)
+                        instance->SetBossState(DATA_SJONNIR_THE_IRONSHAPER, DONE);
+                    break;
             }
         } else uiPhaseTimer -= uiDiff;
 
@@ -685,17 +748,44 @@ struct npc_brann_hos : public EscortAI
             CloseGossipMenuFor(player);
             StartWP();
         }
+        else if (action == GOSSIP_ACTION_INFO_DEF + 3) // Go to Sjonnir door
+        {
+            CloseGossipMenuFor(player);
+            // Teleport Brann to Sjonnir area
+            me->SetHomePosition(BrannSjonnirTelePos);
+            me->UpdatePosition(BrannSjonnirTelePos);
+            me->StopMoving();
+            me->SetWalk(false);
+            me->GetMotionMaster()->MovePath(PATH_SJONNIR_DOOR, false);
+            me->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
+            uiStep = 51;
+            uiPhaseTimer = 0;
+        }
+        else if (action == GOSSIP_ACTION_INFO_DEF + 4) // Open Sjonnir door
+        {
+            CloseGossipMenuFor(player);
+            me->RemoveNpcFlag(UNIT_NPC_FLAG_GOSSIP);
+            uiStep = 55;
+            uiPhaseTimer = 100;
+        }
 
         return true;
     }
 
     bool OnGossipHello(Player* player) override
     {
+        InstanceScript* pInstance = me->GetInstanceScript();
         InitGossipMenuFor(player, GOSSIP_ITEM_START_MID);
         if (me->IsQuestGiver())
             player->PrepareQuestMenu(me->GetGUID());
 
-        AddGossipItemFor(player, GOSSIP_ITEM_START_MID, GOSSIP_ITEM_START_OID, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+        if (_sjonnirPhase == 0 && HasEscortState(STATE_ESCORT_ESCORTING))
+            AddGossipItemFor(player, GOSSIP_ITEM_START_MID, GOSSIP_ITEM_START_OID, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+        else if (_sjonnirPhase == 0 && !HasEscortState(STATE_ESCORT_ESCORTING))
+            AddGossipItemFor(player, GOSSIP_ITEM_START_MID, GOSSIP_ITEM_START_OID, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+        else if (_sjonnirPhase == 1)
+            AddGossipItemFor(player, GOSSIP_ITEM_PROGRESS_MID, GOSSIP_ITEM_PROGRESS_OID, GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 4);
+
         SendGossipMenuFor(player, TEXT_ID_START, me->GetGUID());
 
         return true;

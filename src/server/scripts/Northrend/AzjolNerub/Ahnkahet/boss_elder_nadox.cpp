@@ -17,6 +17,8 @@
 
 #include "ahnkahet.h"
 #include "AreaBoundary.h"
+#include "Containers.h"
+#include "ObjectAccessor.h"
 #include "ScriptedCreature.h"
 #include "ScriptMgr.h"
 #include "SpellAuras.h"
@@ -37,12 +39,14 @@ enum NadoxSpells
     SPELL_BROOD_PLAGUE = 56130,
     SPELL_BROOD_RAGE = 59465,
     SPELL_BERSERK = 26662, // Enraged if too far away from home
-    SPELL_SUMMON_SWARMERS = 56119, // 2x 30178  -- 2x every 10secs
-    SPELL_SUMMON_SWARM_GUARD = 56120, // 1x 30176
+    SPELL_SUMMON_SWARMERS = 56119, // 2x 30178  -- cast on egg
+    SPELL_SUMMON_SWARM_GUARD = 56120, // 1x 30176 -- cast on guardian egg
 
     // Adds
     SPELL_SWARM_BUFF = 56281,
-    SPELL_SPRINT = 56354
+    SPELL_SPRINT = 56354,
+    SPELL_GUARDIAN_AURA = 56151,
+    SPELL_SWARMER_AURA = 56158
 };
 
 enum NadoxEvents
@@ -68,12 +72,15 @@ struct boss_elder_nadox : public BossAI
     {
         _guardianSummoned = false;
         _guardianDied = false;
+        _previousSwarmEggGUID.Clear();
     }
 
     void Reset() override
     {
         _Reset();
         Initialize();
+        _swarmEggs.clear();
+        _guardianEggs.clear();
     }
 
     void JustEngagedWith(Unit* who) override
@@ -89,6 +96,22 @@ struct boss_elder_nadox : public BossAI
             events.ScheduleEvent(EVENT_BROOD_RAGE, 12s);
             events.ScheduleEvent(EVENT_CHECK_ENRAGE, 5s);
         }
+
+        // Cache eggs
+        std::list<Creature*> eggs;
+        // Swarm eggs
+        me->GetCreatureListWithEntryInGrid(eggs, NPC_AHNKAHAR_SWARM_EGG, 250.0f);
+        for (Creature* egg : eggs)
+            if (egg)
+                _swarmEggs.push_back(egg->GetGUID());
+
+        eggs.clear();
+
+        // Guardian eggs
+        me->GetCreatureListWithEntryInGrid(eggs, NPC_AHNKAHAR_GUARDIAN_EGG, 250.0f);
+        for (Creature* egg : eggs)
+            if (egg)
+                _guardianEggs.push_back(egg->GetGUID());
     }
 
     void SummonedCreatureDies(Creature* summon, Unit* /*killer*/) override
@@ -138,10 +161,7 @@ struct boss_elder_nadox : public BossAI
                     events.Repeat(10s, 50s);
                     break;
                 case EVENT_SUMMON_SWARMER:
-                    /// @todo: summoned by egg
-                    DoCast(me, SPELL_SUMMON_SWARMERS);
-                    if (roll_chance_i(33)) // 33% chance of dialog
-                        Talk(SAY_EGG_SAC);
+                    SummonHelpers(true);
                     events.Repeat(10s);
                     break;
                 case EVENT_CHECK_ENRAGE:
@@ -162,9 +182,7 @@ struct boss_elder_nadox : public BossAI
 
         if (!_guardianSummoned && me->HealthBelowPct(50))
         {
-            /// @todo: summoned by egg
-            Talk(EMOTE_HATCHES, me);
-            DoCastSelf(SPELL_SUMMON_SWARM_GUARD);
+            SummonHelpers(false);
             _guardianSummoned = true;
         }
 
@@ -174,6 +192,48 @@ struct boss_elder_nadox : public BossAI
 private:
     bool _guardianSummoned;
     bool _guardianDied;
+    GuidList _swarmEggs;
+    GuidList _guardianEggs;
+    ObjectGuid _previousSwarmEggGUID;
+
+    void SummonHelpers(bool swarm)
+    {
+        if (swarm)
+        {
+            if (_swarmEggs.empty())
+                return;
+
+            // Copy list and remove previous egg to avoid repeating
+            GuidList swarmEggsCopy = _swarmEggs;
+            if (!_previousSwarmEggGUID.IsEmpty())
+                swarmEggsCopy.remove(_previousSwarmEggGUID);
+
+            if (swarmEggsCopy.empty())
+                return;
+
+            _previousSwarmEggGUID = Trinity::Containers::SelectRandomContainerElement(swarmEggsCopy);
+
+            if (Creature* egg = ObjectAccessor::GetCreature(*me, _previousSwarmEggGUID))
+                egg->CastSpell(egg, SPELL_SUMMON_SWARMERS, me->GetGUID());
+
+            if (roll_chance_i(33))
+                Talk(SAY_EGG_SAC);
+        }
+        else
+        {
+            if (_guardianEggs.empty())
+                return;
+
+            ObjectGuid const& guardianEggGUID = Trinity::Containers::SelectRandomContainerElement(_guardianEggs);
+            if (Creature* egg = ObjectAccessor::GetCreature(*me, guardianEggGUID))
+                egg->CastSpell(egg, SPELL_SUMMON_SWARM_GUARD, me->GetGUID());
+
+            Talk(EMOTE_HATCHES, me);
+
+            if (roll_chance_i(33))
+                Talk(SAY_EGG_SAC);
+        }
+    }
 };
 
 struct npc_ahnkahar_nerubian : public ScriptedAI
@@ -184,6 +244,7 @@ struct npc_ahnkahar_nerubian : public ScriptedAI
     {
         _events.Reset();
         _events.ScheduleEvent(EVENT_SPRINT, 13s);
+        DoCastSelf(me->GetEntry() == NPC_AHNKAHAR_GUARDIAN ? SPELL_GUARDIAN_AURA : SPELL_SWARMER_AURA, true);
     }
 
     void UpdateAI(uint32 diff) override

@@ -51,6 +51,8 @@ enum AKCreatureIds
     // Elder Nadox
     NPC_AHNKAHAR_GUARDIAN           = 30176,
     NPC_AHNKAHAR_SWARMER            = 30178,
+    NPC_AHNKAHAR_SWARM_EGG          = 30172,
+    NPC_AHNKAHAR_GUARDIAN_EGG       = 30173,
 
     // Jedoga Shadowseeker
     NPC_TWILIGHT_INITIATE           = 30114,
