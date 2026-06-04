@@ -26,6 +26,157 @@
 #include "Player.h"
 #include "SpellAuras.h"
 #include "SpellScript.h"
+#include "Creature.h"
+
+/*
+ * 通用工具类：将生物A转换成生物B（用于任务法术）
+ */
+class spell_generic_quest_update_entry_SpellScript : public SpellScript
+{
+    PrepareSpellScript(spell_generic_quest_update_entry_SpellScript);
+private:
+    uint16 _spellEffect;
+    uint8 _effIndex;
+    uint32 _originalEntry;
+    uint32 _newEntry;
+    bool _shouldAttack;
+    Milliseconds _despawnTime;
+
+public:
+    spell_generic_quest_update_entry_SpellScript(uint16 spellEffect, uint8 effIndex, uint32 originalEntry, uint32 newEntry, bool shouldAttack, Milliseconds despawnTime = 0s) :
+        SpellScript(), _spellEffect(spellEffect), _effIndex(effIndex), _originalEntry(originalEntry),
+        _newEntry(newEntry), _shouldAttack(shouldAttack), _despawnTime(despawnTime) { }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        if (Creature* creatureTarget = GetHitCreature())
+            if (!creatureTarget->IsPet() && creatureTarget->GetEntry() == _originalEntry)
+            {
+                creatureTarget->UpdateEntry(_newEntry);
+                if (_shouldAttack)
+                    creatureTarget->EngageWithTarget(GetCaster());
+
+                if (_despawnTime != 0s)
+                    creatureTarget->DespawnOrUnsummon(_despawnTime);
+            }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_generic_quest_update_entry_SpellScript::HandleDummy, _effIndex, _spellEffect);
+    }
+};
+
+// http://www.wowhead.com/wotlk/cn/quest=55 摩本特·费尔 (Morbent Fel) - 暮色森林
+enum Quest55Data
+{
+    NPC_MORBENT             = 1200,
+    NPC_WEAKENED_MORBENT    = 24782,
+};
+
+// 8913 - Sacred Cleansing
+class spell_q55_sacred_cleansing : public SpellScriptLoader
+{
+    public:
+        spell_q55_sacred_cleansing() : SpellScriptLoader("spell_q55_sacred_cleansing") { }
+
+        SpellScript* GetSpellScript() const override
+        {
+            return new spell_generic_quest_update_entry_SpellScript(SPELL_EFFECT_DUMMY, EFFECT_1, NPC_MORBENT, NPC_WEAKENED_MORBENT, true);
+        }
+};
+
+// http://www.wowhead.com/wotlk/cn/quest=6124 消除疾病 (Curing the Sick A) / 6129 (H) - 贫瘠之地
+enum Quests6124_6129Data
+{
+    NPC_SICKLY_GAZELLE  = 12296,
+    NPC_CURED_GAZELLE   = 12297,
+    NPC_SICKLY_DEER     = 12298,
+    NPC_CURED_DEER      = 12299,
+};
+
+constexpr Milliseconds Quest6124_6129_DESPAWN_TIME = 30s;
+
+// 19512 - Apply Salve
+class spell_q6124_6129_apply_salve : public SpellScript
+{
+    PrepareSpellScript(spell_q6124_6129_apply_salve);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (GetCastItem())
+            if (Creature* creatureTarget = GetHitCreature())
+            {
+                uint32 newEntry = 0;
+                switch (caster->GetTeam())
+                {
+                    case HORDE:
+                        if (creatureTarget->GetEntry() == NPC_SICKLY_GAZELLE)
+                            newEntry = NPC_CURED_GAZELLE;
+                        break;
+                    case ALLIANCE:
+                        if (creatureTarget->GetEntry() == NPC_SICKLY_DEER)
+                            newEntry = NPC_CURED_DEER;
+                        break;
+                }
+                if (newEntry)
+                {
+                    creatureTarget->UpdateEntry(newEntry);
+                    creatureTarget->DespawnOrUnsummon(Quest6124_6129_DESPAWN_TIME);
+                    caster->KilledMonsterCredit(newEntry);
+                }
+            }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_q6124_6129_apply_salve::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// http://www.wowhead.com/wotlk/cn/quest=10255 测试解药 (Testing the Antidote) - 地狱火半岛
+enum Quest10255Data
+{
+    NPC_HELBOAR     = 16880,
+    NPC_DREADTUSK   = 16992,
+};
+
+// 34665 - Administer Antidote
+class spell_q10255_administer_antidote : public SpellScriptLoader
+{
+    public:
+        spell_q10255_administer_antidote() : SpellScriptLoader("spell_q10255_administer_antidote") { }
+
+        SpellScript* GetSpellScript() const override
+        {
+            return new spell_generic_quest_update_entry_SpellScript(SPELL_EFFECT_DUMMY, EFFECT_0, NPC_HELBOAR, NPC_DREADTUSK, true);
+        }
+};
+
+// http://www.wowhead.com/wotlk/cn/quest=11515 血换血 (Blood for Blood) - 影月谷
+enum Quest11515Data
+{
+    NPC_FELBLOOD_INITIATE   = 24918,
+    NPC_EMACIATED_FELBLOOD  = 24955
+};
+
+// 44936 - Quest - Fel Siphon Dummy
+class spell_q11515_fel_siphon_dummy : public SpellScriptLoader
+{
+    public:
+        spell_q11515_fel_siphon_dummy() : SpellScriptLoader("spell_q11515_fel_siphon_dummy") { }
+
+        SpellScript* GetSpellScript() const override
+        {
+            return new spell_generic_quest_update_entry_SpellScript(SPELL_EFFECT_DUMMY, EFFECT_0, NPC_FELBLOOD_INITIATE, NPC_EMACIATED_FELBLOOD, true);
+        }
+};
 
 enum TamingTheBeast
 {
@@ -250,7 +401,7 @@ class spell_quest_make_player_destroy_totems : public SpellScript
     void HandleScript(SpellEffIndex /*effIndex*/)
     {
         // Ignore reagent cost, consumed by quest
-        GetHitUnit()->CastSpell(GetHitUnit(), SPELL_TOTEM_OF_THE_EARTHEN_RING, TRIGGERED_IGNORE_POWER_AND_REAGENT_COST);
+        GetHitUnit()->CastSpell(GetHitUnit(), SPELL_TOTEM_OF_THE_EARTHEN_RING, TRIGGERED_FULL_MASK);
     }
 
     void Register() override
@@ -261,6 +412,12 @@ class spell_quest_make_player_destroy_totems : public SpellScript
 
 void AddSC_quest_spell_scripts()
 {
+    // 新增：来自 Dusk-Ts-TC 的移植脚本
+    new spell_q55_sacred_cleansing();                                                  // quest=55 摩本特·费尔
+    RegisterSpellScript(spell_q6124_6129_apply_salve);                                 // quest=6124/6129 消除疾病
+    new spell_q10255_administer_antidote();                                             // quest=10255 测试解药
+    new spell_q11515_fel_siphon_dummy();                                                // quest=11515 血换血
+    // 原有脚本
     RegisterSpellScript(spell_quest_taming_the_beast);
     RegisterSpellScript(spell_quest_portal_with_condition);
     RegisterSpellScript(spell_quest_uther_grom_tribute);

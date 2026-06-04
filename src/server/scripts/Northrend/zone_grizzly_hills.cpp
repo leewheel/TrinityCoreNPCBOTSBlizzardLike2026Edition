@@ -1182,6 +1182,42 @@ class spell_grizzly_hills_flight_westfall_to_lights_breach : public AuraScript
     }
 };
 
+/*######
+## Quest 12659: Scalps! (战利品!) - Dusk-Ts-TC 移植
+## 使用埃霍奈的小刀拆掉赫布达卡巨魔的巫毒头饰
+######*/
+
+enum Scalps
+{
+    NPC_SCALPS_KC_BUNNY = 28622,
+};
+
+// 52090 - Ahunae's Knife
+class spell_grizzly_hills_ahunaes_knife : public SpellScript
+{
+    PrepareSpellScript(spell_grizzly_hills_ahunaes_knife);
+
+    bool Load() override
+    {
+        return GetCaster()->GetTypeId() == TYPEID_PLAYER;
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        Player* caster = GetCaster()->ToPlayer();
+        if (Creature* target = GetHitCreature())
+        {
+            target->DespawnOrUnsummon();
+            caster->KilledMonsterCredit(NPC_SCALPS_KC_BUNNY);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_grizzly_hills_ahunaes_knife::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_grizzly_hills()
 {
     RegisterCreatureAI(npc_emily);
@@ -1209,6 +1245,7 @@ void AddSC_grizzly_hills()
     RegisterSpellScript(spell_grizzly_hills_hand_over_reins);
     RegisterSpellScript(spell_grizzly_hills_rage_of_jinarrak);
     RegisterSpellScript(spell_grizzly_hills_ganjo_ressurection);
+    RegisterSpellScript(spell_grizzly_hills_ahunaes_knife);
     RegisterSpellScript(spell_grizzly_hills_flight_onequah_to_lights_breach);
     RegisterSpellScript(spell_grizzly_hills_flight_westfall_to_lights_breach);
 }

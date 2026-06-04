@@ -981,7 +981,30 @@ class spell_dragonblight_corrosive_spit : public AuraScript
 
 enum TheFocusOnTheBeach
 {
+    SPELL_BUNNY_CREDIT_BEAM            = 47390,
     SPELL_LEY_LINE_INFORMATION_01     = 47391
+};
+
+// 50546 - The Focus on the Beach: Ley Line Focus Control Ring Effect（来自 Dusk-Ts-TC）
+class spell_dragonblight_focus_on_the_beach_control_ring : public SpellScript
+{
+    PrepareSpellScript(spell_dragonblight_focus_on_the_beach_control_ring);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_BUNNY_CREDIT_BEAM });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        if (Creature* target = GetHitCreature())
+            target->CastSpell(GetCaster(), SPELL_BUNNY_CREDIT_BEAM, false);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_dragonblight_focus_on_the_beach_control_ring::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
 };
 
 // 47393 - The Focus on the Beach: Quest Completion Script
@@ -1125,6 +1148,50 @@ class spell_dragonblight_lich_king_zap_player : public SpellScript
     }
 };
 
+/*######
+## Quest 12459: That Which Creates Can Also Destroy（来自 Dusk-Ts-TC）
+## 用自然愤怒之种弱化龙骨荒野的精英怪物
+######*/
+
+enum ThatWhichCreatesCanAlsoDestroy
+{
+    NPC_REANIMATED_FROSTWYRM        = 26841,
+    NPC_WEAK_REANIMATED_FROSTWYRM   = 27821,
+
+    NPC_TURGID                      = 27808,
+    NPC_WEAK_TURGID                 = 27809,
+
+    NPC_DEATHGAZE                   = 27122,
+    NPC_WEAK_DEATHGAZE              = 27807,
+};
+
+// 49587 - Seeds of Nature's Wrath
+class spell_dragonblight_seeds_of_natures_wrath : public SpellScript
+{
+    PrepareSpellScript(spell_dragonblight_seeds_of_natures_wrath);
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        if (Creature* creatureTarget = GetHitCreature())
+        {
+            uint32 uiNewEntry = 0;
+            switch (creatureTarget->GetEntry())
+            {
+                case NPC_REANIMATED_FROSTWYRM:  uiNewEntry = NPC_WEAK_REANIMATED_FROSTWYRM; break;
+                case NPC_TURGID:                uiNewEntry = NPC_WEAK_TURGID;               break;
+                case NPC_DEATHGAZE:             uiNewEntry = NPC_WEAK_DEATHGAZE;            break;
+            }
+            if (uiNewEntry)
+                creatureTarget->UpdateEntry(uiNewEntry);
+        }
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_dragonblight_seeds_of_natures_wrath::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 void AddSC_dragonblight()
 {
     RegisterCreatureAI(npc_commander_eligor_dawnbringer);
@@ -1144,6 +1211,8 @@ void AddSC_dragonblight()
     RegisterSpellScript(spell_dragonblight_fill_blood_unholy_frost_gem);
     RegisterSpellScript(spell_dragonblight_scrape_corrosive_spit);
     RegisterSpellScript(spell_dragonblight_corrosive_spit);
+    RegisterSpellScript(spell_dragonblight_seeds_of_natures_wrath);
+    RegisterSpellScript(spell_dragonblight_focus_on_the_beach_control_ring);
     RegisterSpellScript(spell_dragonblight_focus_on_the_beach_quest_completion_script);
     RegisterSpellScript(spell_dragonblight_atop_the_woodlands_quest_completion_script);
     RegisterSpellScript(spell_dragonblight_end_of_the_line_quest_completion_script);

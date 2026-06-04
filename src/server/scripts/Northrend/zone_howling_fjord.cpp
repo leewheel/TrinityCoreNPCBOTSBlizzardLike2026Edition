@@ -645,6 +645,53 @@ class spell_fjord_scourging_crystal_controller : public SpellScript
     }
 };
 
+// 43874 - Scourge Mur'gul Camp: Force Shield Arcane Purple x3（来自 Dusk-Ts-TC）
+class spell_fjord_force_shield_arcane_purple_x3 : public AuraScript
+{
+    PrepareAuraScript(spell_fjord_force_shield_arcane_purple_x3);
+
+    void HandleEffectApply(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* target = GetTarget();
+        target->SetImmuneToPC(true);
+        target->AddUnitState(UNIT_STATE_ROOT);
+    }
+
+    void HandleEffectRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        GetTarget()->SetImmuneToPC(false);
+    }
+
+    void Register() override
+    {
+        OnEffectApply += AuraEffectApplyFn(spell_fjord_force_shield_arcane_purple_x3::HandleEffectApply, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+        OnEffectRemove += AuraEffectRemoveFn(spell_fjord_force_shield_arcane_purple_x3::HandleEffectRemove, EFFECT_0, SPELL_AURA_DUMMY, AURA_EFFECT_HANDLE_REAL);
+    }
+};
+
+// 43882 - Scourging Crystal Controller Dummy（来自 Dusk-Ts-TC）
+class spell_fjord_scourging_crystal_controller_dummy : public SpellScript
+{
+    PrepareSpellScript(spell_fjord_scourging_crystal_controller_dummy);
+
+    bool Validate(SpellInfo const* /*spellEntry*/) override
+    {
+        return ValidateSpellInfo({ SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3 });
+    }
+
+    void HandleDummy(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* target = GetHitUnit())
+            if (target->GetTypeId() == TYPEID_UNIT)
+                target->RemoveAurasDueToSpell(SPELL_FORCE_SHIELD_ARCANE_PURPLE_X3);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_fjord_scourging_crystal_controller_dummy::HandleDummy, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
 /*######
 ## Quest 11306: Apply Heat and Stir
 ######*/
@@ -913,6 +960,8 @@ void AddSC_howling_fjord()
     RegisterSpellScript(spell_fjord_the_way_to_his_heart_reverse_cast);
     RegisterSpellScript(spell_fjord_the_way_to_his_heart_quest_complete);
     RegisterSpellScript(spell_fjord_scourging_crystal_controller);
+    RegisterSpellScript(spell_fjord_force_shield_arcane_purple_x3);
+    RegisterSpellScript(spell_fjord_scourging_crystal_controller_dummy);
     RegisterSpellScript(spell_fjord_mixing_blood);
     RegisterSpellScript(spell_fjord_mixing_vrykul_blood);
     RegisterSpellScript(spell_fjord_failed_mix_concoction_1);

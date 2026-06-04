@@ -21168,7 +21168,7 @@ void bot_ai::OnBotEnterBattleground()
 {
     Battleground* bg = ASSERT_NOTNULL(GetBG());
 
-    if (bg->GetStatus() != STATUS_IN_PROGRESS && IsWanderer())
+    if (bg->GetStatus() != STATUS_IN_PROGRESS)
     {
         BotWPFlags myTeamSpawnFlags;
         if (bg->isArena())
