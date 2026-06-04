@@ -24,6 +24,7 @@
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptedEscortAI.h"
+#include "SpellAuras.h"
 #include "SpellScript.h"
 
 enum BloodyBreakoutTexts
@@ -972,19 +973,66 @@ public:
     };
 };
 
-// 53110 - Devour Humanoid
+// 53110 - Devour Humanoid (quest 12779 "An End to All Things")
+enum DevourHumanoid
+{
+    NPC_HEARTHGLEN_CRUSADER = 29102,
+    NPC_TIRISFAL_CRUSADER   = 29103
+};
+
 class spell_death_knight_devour_humanoid : public SpellScript
 {
     PrepareSpellScript(spell_death_knight_devour_humanoid);
 
+    SpellCastResult CheckCast()
+    {
+        if (Unit* caster = GetCaster())
+            if (caster->FindNearestCreature(NPC_HEARTHGLEN_CRUSADER, 15.0f, true) ||
+                caster->FindNearestCreature(NPC_TIRISFAL_CRUSADER, 15.0f, true))
+                return SPELL_CAST_OK;
+
+        return SPELL_FAILED_BAD_TARGETS;
+    }
+
     void HandleScriptEffect(SpellEffIndex /* effIndex */)
     {
-        GetHitUnit()->CastSpell(GetCaster(), GetEffectValue(), true);
+        if (Creature* target = GetHitUnit()->ToCreature())
+            if (Unit* caster = GetCaster())
+            {
+                target->AI()->AttackStart(caster);
+                target->CastSpell(caster, GetEffectValue(), true); // 53111
+            }
     }
 
     void Register() override
     {
+        OnCheckCast += SpellCheckCastFn(spell_death_knight_devour_humanoid::CheckCast);
         OnEffectHitTarget += SpellEffectFn(spell_death_knight_devour_humanoid::HandleScriptEffect, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
+// 53111 - Devour Humanoid (devour aura, casted by the devoured creature)
+class spell_death_knight_devour_humanoid_aura : public AuraScript
+{
+    PrepareAuraScript(spell_death_knight_devour_humanoid_aura);
+
+    void OnRemove(AuraEffect const* /*aurEff*/, AuraEffectHandleModes /*mode*/)
+    {
+        Unit* caster = GetCaster();
+        Unit* target = GetTarget();
+        if (!caster || !target)
+            return;
+
+        if (GetTargetApplication()->GetRemoveMode() == AURA_REMOVE_BY_EXPIRE)
+        {
+            caster->SetDisableGravity(true);
+            Unit::Kill(target, caster);
+        }
+    }
+
+    void Register() override
+    {
+        AfterEffectRemove += AuraEffectRemoveFn(spell_death_knight_devour_humanoid_aura::OnRemove, EFFECT_0, SPELL_AURA_CONTROL_VEHICLE, AURA_EFFECT_HANDLE_REAL);
     }
 };
 
@@ -1125,6 +1173,7 @@ void AddSC_the_scarlet_enclave_c2()
     new npc_acherus_necromancer();
     new npc_gothik_the_harvester();
     RegisterSpellScript(spell_death_knight_devour_humanoid);
+    RegisterSpellScript(spell_death_knight_devour_humanoid_aura);
     RegisterSpellScript(spell_chapter2_persuasive_strike);
     RegisterSpellScript(spell_portal_effect_acherus);
 }
