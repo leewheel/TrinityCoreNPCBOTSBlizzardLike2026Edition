@@ -17,7 +17,9 @@
 
 #include "ScriptedGossip.h"
 #include "ScriptMgr.h"
+#include "CreatureTextMgr.h"
 #include "GameObject.h"
+#include <limits>
 #include "MotionMaster.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
@@ -611,6 +613,365 @@ public:
     };
 };
 
+/*######
+## npc_acherus_necromancer (Entry 28889)
+######*/
+enum NecroSpells
+{
+    SPELL_SCARLET_GHOUL      = 52683,
+    SPELL_SCOURGE_GRYPHON    = 52685,
+    SPELL_GHOULPLOSION       = 52672
+};
+
+enum NecroNPCs
+{
+    NPC_GLUTTONOUS_GEIST             = 28905,
+    NPC_DEAD_SCARLET_MEDIC           = 28895,
+    NPC_DEAD_SCARLET_INFANTRYMAN     = 28896,
+    NPC_DEAD_SCARLET_CAPTAIN         = 28898,
+    NPC_DEAD_SCARLET_PEASANT         = 28892,
+    NPC_DEAD_SCARLET_MINER           = 28891,
+    NPC_DEAD_SCARLET_FLEET_DEFENDER  = 28886,
+    NPC_DEAD_SCARLET_GRYPHON         = 28893
+};
+
+class npc_acherus_necromancer : public CreatureScript
+{
+public:
+    npc_acherus_necromancer() : CreatureScript("npc_acherus_necromancer") { }
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_acherus_necromancerAI(creature);
+    }
+
+    struct npc_acherus_necromancerAI : public ScriptedAI
+    {
+        npc_acherus_necromancerAI(Creature* creature) : ScriptedAI(creature)
+        {
+            _pathId = me->GetWaypointPath();
+        }
+
+        void Reset() override
+        {
+            _events.Reset();
+            _targetCorpseGUID.Clear();
+            _geistGUID.Clear();
+            _isOnRitual = false;
+
+            if (_pathId)
+                me->GetMotionMaster()->MovePath(_pathId, true);
+
+            _events.ScheduleEvent(EVENT_START_RITUAL, 50s, 60s);
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            _events.Update(diff);
+
+            while (uint32 eventId = _events.ExecuteEvent())
+            {
+                switch (eventId)
+                {
+                    case EVENT_START_RITUAL:
+                    {
+                        if (_isOnRitual)
+                        {
+                            _events.ScheduleEvent(EVENT_START_RITUAL, 5s, 10s);
+                            break;
+                        }
+
+                        Creature* nearestCorpse = nullptr;
+                        float nearestDist = std::numeric_limits<float>::max();
+                        static constexpr uint32 corpseEntries[] = {
+                            NPC_DEAD_SCARLET_MEDIC, NPC_DEAD_SCARLET_INFANTRYMAN, NPC_DEAD_SCARLET_CAPTAIN,
+                            NPC_DEAD_SCARLET_PEASANT, NPC_DEAD_SCARLET_MINER, NPC_DEAD_SCARLET_FLEET_DEFENDER
+                        };
+
+                        for (uint32 entry : corpseEntries)
+                        {
+                            if (Creature* corpse = me->FindNearestCreature(entry, 60.0f, true))
+                            {
+                                float dist = me->GetDistance(corpse);
+                                if (dist < nearestDist)
+                                {
+                                    nearestDist = dist;
+                                    nearestCorpse = corpse;
+                                }
+                            }
+                        }
+
+                        if (!nearestCorpse)
+                        {
+                            _events.ScheduleEvent(EVENT_START_RITUAL, 5s, 10s);
+                            break;
+                        }
+
+                        _isOnRitual = true;
+                        _targetCorpseGUID = nearestCorpse->GetGUID();
+                        _geistGUID.Clear();
+                        me->GetMotionMaster()->Clear();
+                        float x, y, z;
+                        nearestCorpse->GetClosePoint(x, y, z, me->GetCombatReach());
+                        me->GetMotionMaster()->MovePoint(POINT_CORPSE_REACHED, x, y, z);
+                        break;
+                    }
+                    case EVENT_GHOULPLOSION:
+                    {
+                        if (Creature* geist = ObjectAccessor::GetCreature(*me, _geistGUID))
+                        {
+                            me->SetFacingToObject(geist);
+                            DoCast(geist, SPELL_GHOULPLOSION);
+                        }
+                        break;
+                    }
+                    case EVENT_RAISE_GHOUL:
+                    {
+                        if (Creature* corpse = ObjectAccessor::GetCreature(*me, _targetCorpseGUID))
+                        {
+                            me->SetFacingToObject(corpse);
+                            DoCast(corpse, SPELL_SCARLET_GHOUL);
+                        }
+                        break;
+                    }
+                    case EVENT_RESUME_WP:
+                    {
+                        _isOnRitual = false;
+                        _targetCorpseGUID.Clear();
+                        if (_pathId)
+                            me->GetMotionMaster()->MovePath(_pathId, true);
+                        _events.ScheduleEvent(EVENT_START_RITUAL, 20s, 30s);
+                        break;
+                    }
+                }
+            }
+        }
+
+        void MovementInform(uint32 type, uint32 id) override
+        {
+            if (type == POINT_MOTION_TYPE && id == POINT_CORPSE_REACHED)
+            {
+                Creature* geist = me->FindNearestCreature(NPC_GLUTTONOUS_GEIST, 3.0f, true);
+                if (geist)
+                {
+                    me->SetFacingToObject(geist);
+                    _geistGUID = geist->GetGUID();
+                    _events.ScheduleEvent(EVENT_GHOULPLOSION, 3s);
+                    _events.ScheduleEvent(EVENT_RAISE_GHOUL, 6s);
+                    _events.ScheduleEvent(EVENT_RESUME_WP, 9s);
+                }
+                else
+                {
+                    if (Creature* corpse = ObjectAccessor::GetCreature(*me, _targetCorpseGUID))
+                        me->SetFacingToObject(corpse);
+                    _events.ScheduleEvent(EVENT_RAISE_GHOUL, 3s);
+                    _events.ScheduleEvent(EVENT_RESUME_WP, 6s);
+                }
+            }
+        }
+
+    private:
+        EventMap _events;
+        ObjectGuid _targetCorpseGUID;
+        ObjectGuid _geistGUID;
+        bool _isOnRitual;
+        uint32 _pathId;
+
+        enum Events
+        {
+            EVENT_START_RITUAL = 1,
+            EVENT_GHOULPLOSION,
+            EVENT_RAISE_GHOUL,
+            EVENT_RESUME_WP
+        };
+
+        enum Points
+        {
+            POINT_CORPSE_REACHED = 1
+        };
+    };
+};
+
+/*######
+## npc_gothik_the_harvester (Entry 28890)
+######*/
+class npc_gothik_the_harvester : public CreatureScript
+{
+public:
+    npc_gothik_the_harvester() : CreatureScript("npc_gothik_the_harvester") { }
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return new npc_gothik_the_harvesterAI(creature);
+    }
+
+    struct npc_gothik_the_harvesterAI : public ScriptedAI
+    {
+        npc_gothik_the_harvesterAI(Creature* creature) : ScriptedAI(creature)
+        {
+            _pathId = me->GetWaypointPath();
+        }
+
+        enum Says
+        {
+            SAY_GRYPHON = 0,
+            SAY_GHOUL   = 1,
+            SAY_GEIST   = 2
+        };
+
+        void Reset() override
+        {
+            _events.Reset();
+            _targetCorpseGUID.Clear();
+            _geistGUID.Clear();
+            _isOnRitual = false;
+
+            if (_pathId)
+                me->GetMotionMaster()->MovePath(_pathId, true);
+
+            _events.ScheduleEvent(EVENT_START_RITUAL, 50s, 60s);
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            _events.Update(diff);
+
+            while (uint32 eventId = _events.ExecuteEvent())
+            {
+                switch (eventId)
+                {
+                    case EVENT_START_RITUAL:
+                    {
+                        if (_isOnRitual)
+                        {
+                            _events.ScheduleEvent(EVENT_START_RITUAL, 5s, 10s);
+                            break;
+                        }
+
+                        Creature* nearestCorpse = nullptr;
+                        float nearestDist = std::numeric_limits<float>::max();
+                        static constexpr uint32 corpseEntries[] = {
+                            NPC_DEAD_SCARLET_MEDIC, NPC_DEAD_SCARLET_INFANTRYMAN, NPC_DEAD_SCARLET_CAPTAIN,
+                            NPC_DEAD_SCARLET_PEASANT, NPC_DEAD_SCARLET_MINER, NPC_DEAD_SCARLET_FLEET_DEFENDER,
+                            NPC_DEAD_SCARLET_GRYPHON
+                        };
+
+                        for (uint32 entry : corpseEntries)
+                        {
+                            if (Creature* corpse = me->FindNearestCreature(entry, 60.0f, true))
+                            {
+                                float dist = me->GetDistance(corpse);
+                                if (dist < nearestDist)
+                                {
+                                    nearestDist = dist;
+                                    nearestCorpse = corpse;
+                                }
+                            }
+                        }
+
+                        if (!nearestCorpse)
+                        {
+                            _events.ScheduleEvent(EVENT_START_RITUAL, 5s, 10s);
+                            break;
+                        }
+
+                        _isOnRitual = true;
+                        _targetCorpseGUID = nearestCorpse->GetGUID();
+                        _geistGUID.Clear();
+                        me->GetMotionMaster()->Clear();
+                        float x, y, z;
+                        nearestCorpse->GetClosePoint(x, y, z, me->GetCombatReach());
+                        me->GetMotionMaster()->MovePoint(POINT_CORPSE_REACHED, x, y, z);
+                        break;
+                    }
+                    case EVENT_GHOULPLOSION:
+                    {
+                        if (Creature* geist = ObjectAccessor::GetCreature(*me, _geistGUID))
+                        {
+                            Talk(SAY_GEIST);
+                            me->SetFacingToObject(geist);
+                            DoCast(geist, SPELL_GHOULPLOSION);
+                        }
+                        break;
+                    }
+                    case EVENT_RAISE_DEAD:
+                    {
+                        if (Creature* corpse = ObjectAccessor::GetCreature(*me, _targetCorpseGUID))
+                        {
+                            me->SetFacingToObject(corpse);
+                            if (corpse->GetEntry() == NPC_DEAD_SCARLET_GRYPHON)
+                                DoCast(corpse, SPELL_SCOURGE_GRYPHON);
+                            else
+                                DoCast(corpse, SPELL_SCARLET_GHOUL);
+                        }
+                        break;
+                    }
+                    case EVENT_RESUME_WP:
+                    {
+                        _isOnRitual = false;
+                        _targetCorpseGUID.Clear();
+                        if (_pathId)
+                            me->GetMotionMaster()->MovePath(_pathId, true);
+                        _events.ScheduleEvent(EVENT_START_RITUAL, 50s, 60s);
+                        break;
+                    }
+                }
+            }
+        }
+
+        void MovementInform(uint32 type, uint32 id) override
+        {
+            if (type == POINT_MOTION_TYPE && id == POINT_CORPSE_REACHED)
+            {
+                Creature* corpse = ObjectAccessor::GetCreature(*me, _targetCorpseGUID);
+                if (corpse)
+                {
+                    me->SetFacingToObject(corpse);
+                    if (corpse->GetEntry() == NPC_DEAD_SCARLET_GRYPHON)
+                        Talk(SAY_GRYPHON);
+                    else
+                        Talk(SAY_GHOUL);
+                }
+
+                Creature* geist = me->FindNearestCreature(NPC_GLUTTONOUS_GEIST, 3.0f, true);
+                if (geist)
+                {
+                    me->SetFacingToObject(geist);
+                    _geistGUID = geist->GetGUID();
+                    _events.ScheduleEvent(EVENT_GHOULPLOSION, 3s);
+                    _events.ScheduleEvent(EVENT_RAISE_DEAD, 6s);
+                    _events.ScheduleEvent(EVENT_RESUME_WP, 9s);
+                }
+                else
+                {
+                    _events.ScheduleEvent(EVENT_RAISE_DEAD, 3s);
+                    _events.ScheduleEvent(EVENT_RESUME_WP, 6s);
+                }
+            }
+        }
+
+    private:
+        EventMap _events;
+        ObjectGuid _targetCorpseGUID;
+        ObjectGuid _geistGUID;
+        bool _isOnRitual;
+        uint32 _pathId;
+
+        enum Events
+        {
+            EVENT_START_RITUAL = 1,
+            EVENT_GHOULPLOSION,
+            EVENT_RAISE_DEAD,
+            EVENT_RESUME_WP
+        };
+
+        enum Points
+        {
+            POINT_CORPSE_REACHED = 1
+        };
+    };
+};
+
 // 53110 - Devour Humanoid
 class spell_death_knight_devour_humanoid : public SpellScript
 {
@@ -627,10 +988,143 @@ class spell_death_knight_devour_humanoid : public SpellScript
     }
 };
 
+//How to win friends and influence enemies
+enum PersuasiveStrike
+{
+    SAY_CRUSADER             = 1,
+    SAY_PERSUADED1           = 2,
+    SAY_PERSUADED2           = 3,
+    SAY_PERSUADED3           = 4,
+    SAY_PERSUADED4           = 5,
+    SAY_PERSUADED5           = 6,
+    SAY_PERSUADED6           = 7,
+    SAY_PERSUADE_RAND        = 8,
+    QUEST_HOW_TO_WIN_FRIENDS = 12720,
+
+    NPC_SCARLET_PREACHER     = 28939,
+    NPC_SCARLET_COMMANDER    = 28936,
+    NPC_SCARLET_CRUSADER     = 28940,
+    NPC_SCARLET_MARKSMAN     = 28610,
+    NPC_SCARLET_LORD_MCCREE  = 28964
+};
+
+enum AcherusPortal
+{
+    SPELL_PORTAL_EFFECT_ACHERUS   = 53098,
+    QUEST_SCARLET_ARMIES_APPROACH = 12757
+};
+
+// 52781 - Persuasive Strike
+class spell_chapter2_persuasive_strike : public SpellScript
+{
+    PrepareSpellScript(spell_chapter2_persuasive_strike);
+
+    bool Load() override
+    {
+        return GetCaster() && GetCaster()->IsPlayer()
+            && GetCaster()->ToPlayer()->GetQuestStatus(QUEST_HOW_TO_WIN_FRIENDS) == QUEST_STATUS_INCOMPLETE;
+    }
+
+    void HandleHit(SpellEffIndex /*effIndex*/)
+    {
+        Creature* creature = GetHitCreature();
+        Player* player = GetCaster()->ToPlayer();
+
+        if (!creature || !player)
+            return;
+
+        uint32 entry = creature->GetEntry();
+        if (entry != NPC_SCARLET_PREACHER && entry != NPC_SCARLET_COMMANDER && entry != NPC_SCARLET_CRUSADER
+            && entry != NPC_SCARLET_MARKSMAN && entry != NPC_SCARLET_LORD_MCCREE)
+            return;
+
+        sCreatureTextMgr->SendChat(creature, SAY_PERSUADE_RAND, nullptr, CHAT_MSG_ADDON, LANG_ADDON, TEXT_RANGE_NORMAL, 0, TEAM_OTHER, false, player);
+
+        if (roll_chance_f(30.0f))
+        {
+            creature->CombatStop(true);
+            creature->GetMotionMaster()->MoveIdle();
+            creature->SetImmuneToPC(true);
+            creature->SetUnitFlag(UNIT_FLAG_NON_ATTACKABLE);
+            creature->SetReactState(REACT_PASSIVE);
+
+            creature->m_Events.AddEventAtOffset([creature]() { creature->AI()->Talk(SAY_PERSUADED1); }, 8s);
+            creature->m_Events.AddEventAtOffset([creature]() { creature->AI()->Talk(SAY_PERSUADED2); }, 16s);
+            creature->m_Events.AddEventAtOffset([creature]() { creature->AI()->Talk(SAY_PERSUADED3); }, 24s);
+            creature->m_Events.AddEventAtOffset([creature]() { creature->AI()->Talk(SAY_PERSUADED4); }, 32s);
+
+            ObjectGuid playerGuid = player->GetGUID();
+
+            creature->m_Events.AddEventAtOffset([creature, playerGuid]
+            {
+                if (Player* caster = ObjectAccessor::GetPlayer(*creature, playerGuid))
+                    sCreatureTextMgr->SendChat(creature, SAY_PERSUADED5, nullptr, CHAT_MSG_ADDON, LANG_ADDON, TEXT_RANGE_NORMAL, 0, TEAM_OTHER, false, caster);
+            }, 40s);
+
+            creature->m_Events.AddEventAtOffset([creature, playerGuid]
+            {
+                creature->AI()->Talk(SAY_PERSUADED6);
+
+                if (Player* caster = ObjectAccessor::GetPlayer(*creature, playerGuid))
+                {
+                    Unit::Kill(caster, creature);
+                    caster->GroupEventHappens(QUEST_HOW_TO_WIN_FRIENDS, creature);
+                }
+                else
+                    creature->KillSelf();
+            }, 48s);
+        }
+        else
+            creature->m_Events.AddEventAtOffset([creature]() { creature->AI()->Talk(SAY_CRUSADER); }, 1s);
+    }
+
+    void Register() override
+    {
+        OnEffectHitTarget += SpellEffectFn(spell_chapter2_persuasive_strike::HandleHit, EFFECT_0, SPELL_EFFECT_DUMMY);
+    }
+};
+
+// 53098 - Portal Effect (Acherus)
+class spell_portal_effect_acherus : public SpellScript
+{
+    PrepareSpellScript(spell_portal_effect_acherus);
+
+    bool Validate(SpellInfo const* /*spellInfo*/) override
+    {
+        return ValidateSpellInfo({ SPELL_PORTAL_EFFECT_ACHERUS });
+    }
+
+    SpellCastResult CheckCast()
+    {
+        Unit* target = GetExplTargetUnit();
+        if (target && target->IsPlayer() && target->ToPlayer()->GetQuestStatus(QUEST_SCARLET_ARMIES_APPROACH) == QUEST_STATUS_INCOMPLETE)
+            return SPELL_CAST_OK;
+
+        return SPELL_FAILED_DONT_REPORT;
+    }
+
+    void HandleScriptEffect(SpellEffIndex /*effIndex*/)
+    {
+        if (Unit* caster = GetCaster())
+            if (Player* player = GetHitPlayer())
+                caster->CastSpell(player, GetEffectValue(), true);
+    }
+
+    void Register() override
+    {
+        OnCheckCast += SpellCheckCastFn(spell_portal_effect_acherus::CheckCast);
+        OnEffectHitTarget += SpellEffectFn(spell_portal_effect_acherus::HandleScriptEffect, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+    }
+};
+
 void AddSC_the_scarlet_enclave_c2()
 {
     RegisterCreatureAI(npc_koltira_deathweaver);
     new npc_scarlet_courier();
     new npc_a_special_surprise();
+    new npc_acherus_necromancer();
+    new npc_gothik_the_harvester();
     RegisterSpellScript(spell_death_knight_devour_humanoid);
+    RegisterSpellScript(spell_chapter2_persuasive_strike);
+    RegisterSpellScript(spell_portal_effect_acherus);
 }
