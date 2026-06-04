@@ -47,6 +47,7 @@ enum ICSharedSpells
 
     // Shadowmourne questline
     SPELL_UNSATED_CRAVING               = 71168,
+    SPELL_WEB_BEAM2                     = 69986,
     SPELL_SHADOWS_FATE                  = 71169,
 
     // Empowering Blood Orb
@@ -121,7 +122,8 @@ enum ICDataTypes
     DATA_BLOOD_PRINCE_COUNCIL_INTRO    = 43,
     DATA_SINDRAGOSA_INTRO              = 44,
     DATA_FACTION_BUFF                  = 45, // used by conditions
-    DATA_NERUBAR_BROODKEEPER_EVENT     = 46
+    DATA_SINDRAGOSA_GAUNTLET           = 46,
+    DATA_NERUBAR_BROODKEEPER_EVENT     = 47
 };
 
 enum ICCreaturesIds
@@ -284,6 +286,11 @@ enum ICCreaturesIds
     NPC_YMIRJAR_WARLORD                         = 37133,
     NPC_SISTER_SVALNA                           = 37126,
     NPC_IMPALING_SPEAR                          = 38248,
+    NPC_NERUBAR_CHAMPION                        = 37501,
+    NPC_NERUBAR_WEBWEAVER                       = 37502,
+    NPC_NERUBAR_BROODLING                       = 37232,
+    NPC_FROSTWARDEN_SORCERESS                   = 37229,
+    NPC_FROSTWARDEN_WARRIOR                     = 37228,
 
     // Valithria Dreamwalker
     NPC_VALITHRIA_DREAMWALKER                   = 36789,
@@ -481,6 +488,9 @@ enum ICAchievementCriteriaIds
 
 enum ICSharedActions
 {
+    // Frostwing Halls gauntlet event (重新定义避免与 boss_sister_svalna.cpp 冲突)
+    ACTION_GAUNTLET_START        = 99,
+
     // Nerub'ar Broodkeeper event
     ACTION_NERUBAR_FALL          = 1,
 

@@ -1607,6 +1607,258 @@ class at_icc_nerubar_broodkeeper : public OnlyOnceAreaTriggerScript
         }
 };
 
+/*######
+## Frostwing Halls gauntlet controller (移植自 Acore)
+######*/
+
+enum GauntletEvents
+{
+    SAY_INIT                    = 0,
+    POINT_ENTER_COMBAT          = 1,
+
+    EVENT_CHECK_FIGHT           = 1,
+    EVENT_GAUNTLET_PHASE1       = 2,
+    EVENT_GAUNTLET_PHASE2       = 3,
+    EVENT_GAUNTLET_PHASE3       = 4,
+    EVENT_SUMMON_BROODLING      = 5
+};
+
+class npc_icc_gauntlet_controller : public CreatureScript
+{
+public:
+    npc_icc_gauntlet_controller() : CreatureScript("npc_icc_gauntlet_controller") { }
+
+    struct npc_icc_gauntlet_controllerAI : public NullCreatureAI
+    {
+        npc_icc_gauntlet_controllerAI(Creature* creature) : NullCreatureAI(creature), summons(me)
+        {
+            instance = creature->GetInstanceScript();
+            _gauntletState = GAUNTLET_NOT_STARTED;
+        }
+
+        SummonList summons;
+        InstanceScript* instance;
+        EventMap events;
+        uint8 _gauntletState;
+        enum GauntletState : uint8
+        {
+            GAUNTLET_NOT_STARTED = 0,
+            GAUNTLET_IN_PROGRESS = 1,
+            GAUNTLET_DONE = 2
+        };
+
+        void ScheduleBroodlings()
+        {
+            for (uint8 i = 0; i < 30; ++i)
+                events.ScheduleEvent(EVENT_SUMMON_BROODLING, Milliseconds(10000 + i * 350));
+        }
+
+        void SummonBroodling()
+        {
+            float dist = frand(18.0f, 39.0f);
+            float o = rand_norm() * 2 * M_PI;
+            if (Creature* broodling = me->SummonCreature(NPC_NERUBAR_BROODLING, { me->GetPositionX() + cos(o) * dist, me->GetPositionY() + std::sin(o) * dist, 250.0f, Position::NormalizeOrientation(o - M_PI) }))
+            {
+                broodling->CastSpell(broodling, SPELL_WEB_BEAM2, false);
+                broodling->GetMotionMaster()->MovePoint(POINT_ENTER_COMBAT, broodling->GetPositionX(), broodling->GetPositionY(), 213.03f);
+            }
+        }
+
+        void SummonFrostwardens()
+        {
+            for (uint8 i = 0; i < 3; ++i)
+            {
+                me->SummonCreature(i == 1 ? NPC_FROSTWARDEN_SORCERESS : NPC_FROSTWARDEN_WARRIOR, { 4173.94f + i * 7.0f, 2409.15f, 211.033f, 1.56f });
+                me->SummonCreature(i == 1 ? NPC_FROSTWARDEN_SORCERESS : NPC_FROSTWARDEN_WARRIOR, { 4173.94f + i * 7.0f, 2556.71f, 211.033f, 4.712f });
+            }
+        }
+
+        void SummonSpiders()
+        {
+            me->SummonCreature(NPC_NERUBAR_CHAMPION, { 4207.30f, 2532.00f, 256.0f, 4.253f });
+            me->SummonCreature(NPC_NERUBAR_WEBWEAVER, { 4228.79f, 2510.36f, 256.0f, 3.577f });
+            me->SummonCreature(NPC_NERUBAR_CHAMPION, { 4228.34f, 2458.20f, 256.0f, 2.642f });
+            me->SummonCreature(NPC_NERUBAR_WEBWEAVER, { 4207.54f, 2437.18f, 256.0f, 2.073f });
+            me->SummonCreature(NPC_NERUBAR_CHAMPION, { 4156.20f, 2436.80f, 256.0f, 1.083f });
+            me->SummonCreature(NPC_NERUBAR_WEBWEAVER, { 4133.50f, 2459.28f, 256.0f, 0.483f });
+            me->SummonCreature(NPC_NERUBAR_CHAMPION, { 4134.28f, 2509.71f, 256.0f, 5.788f });
+            me->SummonCreature(NPC_NERUBAR_WEBWEAVER, { 4156.29f, 2532.19f, 256.0f, 5.187f });
+        }
+
+        void SpidersMoveDown()
+        {
+            for (SummonList::const_iterator itr = summons.begin(); itr != summons.end(); ++itr)
+                if (Creature* spider = ObjectAccessor::GetCreature(*me, *itr))
+                    if (spider->GetPositionZ() > 220.0f)
+                    {
+                        spider->CastSpell(spider, SPELL_WEB_BEAM2, false);
+                        Position landPos(spider->GetPositionX(), spider->GetPositionY(), 213.03f);
+                        spider->GetMotionMaster()->MoveLand(POINT_ENTER_COMBAT, landPos);
+                    }
+        }
+
+        void DoAction(int32 param) override
+        {
+            if (param == ACTION_GAUNTLET_START)
+            {
+                Talk(SAY_INIT);
+                me->setActive(true);
+                events.Reset();
+                events.SetPhase(0);
+                events.ScheduleEvent(EVENT_CHECK_FIGHT, 1s);
+                events.ScheduleEvent(EVENT_GAUNTLET_PHASE1, 0ms);
+                _gauntletState = GAUNTLET_IN_PROGRESS;
+            }
+        }
+
+        void Reset() override
+        {
+            events.Reset();
+            summons.DespawnAll();
+            if (_gauntletState != GAUNTLET_DONE)
+            {
+                _gauntletState = GAUNTLET_NOT_STARTED;
+                SummonSpiders();
+            }
+        }
+
+        void JustReachedHome() override
+        {
+            me->setActive(false);
+        }
+
+        void JustDied(Unit*) override
+        {
+            _gauntletState = GAUNTLET_DONE;
+        }
+
+        void JustSummoned(Creature* summon) override
+        {
+            summons.Summon(summon);
+            if (summon->GetPositionZ() > 220.0f)
+            {
+                summon->SetDisableGravity(true);
+                summon->SetWalk(true);
+            }
+        }
+
+        void SummonedCreatureDies(Creature* summon, Unit*) override
+        {
+            summons.Despawn(summon);
+
+            // Check if all non-broodling summons are dead
+            bool allNonBroodlingDead = true;
+            for (SummonList::const_iterator itr = summons.begin(); itr != summons.end(); ++itr)
+                if (Creature* s = ObjectAccessor::GetCreature(*me, *itr))
+                    if (s->GetEntry() != NPC_NERUBAR_BROODLING && s->IsAlive())
+                    {
+                        allNonBroodlingDead = false;
+                        break;
+                    }
+
+            if (allNonBroodlingDead)
+            {
+                if (events.GetPhaseMask() == 0)
+                {
+                    events.SetPhase(1);
+                    events.ScheduleEvent(EVENT_GAUNTLET_PHASE2, 0ms);
+                }
+                else if (events.GetPhaseMask() == 1)
+                {
+                    events.SetPhase(2);
+                    events.ScheduleEvent(EVENT_GAUNTLET_PHASE3, 0ms);
+                }
+                else
+                    me->KillSelf();
+            }
+        }
+
+        void UpdateAI(uint32 diff) override
+        {
+            events.Update(diff);
+            switch (events.ExecuteEvent())
+            {
+                case EVENT_CHECK_FIGHT:
+                    {
+                        Map::PlayerList const& pList = me->GetMap()->GetPlayers();
+                        for (Map::PlayerList::const_iterator itr = pList.begin(); itr != pList.end(); ++itr)
+                        {
+                            if (me->GetDistance(itr->GetSource()) > 100.0f || !itr->GetSource()->IsAlive() || itr->GetSource()->IsGameMaster())
+                                continue;
+
+                            events.ScheduleEvent(EVENT_CHECK_FIGHT, 1s);
+                            return;
+                        }
+
+                        CreatureAI::EnterEvadeMode();
+                        return;
+                    }
+                case EVENT_GAUNTLET_PHASE1:
+                    ScheduleBroodlings();
+                    SpidersMoveDown();
+                    break;
+                case EVENT_GAUNTLET_PHASE2:
+                    ScheduleBroodlings();
+                    SummonFrostwardens();
+                    break;
+                case EVENT_GAUNTLET_PHASE3:
+                    ScheduleBroodlings();
+                    SummonSpiders();
+                    SpidersMoveDown();
+                    break;
+                case EVENT_SUMMON_BROODLING:
+                    SummonBroodling();
+                    break;
+            }
+        }
+    };
+
+    CreatureAI* GetAI(Creature* creature) const override
+    {
+        return GetIcecrownCitadelAI<npc_icc_gauntlet_controllerAI>(creature);
+    }
+};
+
+/*######
+## at_icc_start_frostwing_gauntlet (移植自 Acore)
+######*/
+
+class at_icc_gauntlet_event : public AreaTriggerScript
+{
+public:
+    at_icc_gauntlet_event() : AreaTriggerScript("at_icc_gauntlet_event") { }
+
+    bool OnTrigger(Player* player, AreaTriggerEntry const* /*areaTrigger*/) override
+    {
+        // 移植自 Acore: 查找世界触发器启动 Gauntlet
+        if (Creature* trigger = player->FindNearestCreature(22515, 150.0f))
+            trigger->AI()->DoAction(ACTION_GAUNTLET_START);
+
+        return true;
+    }
+};
+
+/*######
+## at_icc_spire_frostwyrm (移植自 Acore)
+######*/
+
+class at_icc_spire_frostwyrm : public AreaTriggerScript
+{
+public:
+    at_icc_spire_frostwyrm() : AreaTriggerScript("at_icc_spire_frostwyrm") { }
+
+    bool OnTrigger(Player* player, AreaTriggerEntry const* /*areaTrigger*/) override
+    {
+        if (InstanceScript* instance = player->GetInstanceScript())
+        {
+            if (Creature* sindragosa = ObjectAccessor::GetCreature(*player, instance->GetGuidData(DATA_SINDRAGOSA)))
+                sindragosa->AI()->DoAction(ACTION_START_FROSTWYRM);
+        }
+
+        return true;
+    }
+};
+
 void AddSC_icecrown_citadel()
 {
     // Creatures
@@ -1645,4 +1897,9 @@ void AddSC_icecrown_citadel()
     new at_icc_shutdown_traps();
     new at_icc_start_blood_quickening();
     new at_icc_nerubar_broodkeeper();
+
+    // 移植自 Acore: Frostwing Gauntlet
+    new npc_icc_gauntlet_controller();
+    new at_icc_gauntlet_event();
+    new at_icc_spire_frostwyrm();
 }
