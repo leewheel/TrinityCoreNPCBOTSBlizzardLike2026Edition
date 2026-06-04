@@ -3916,16 +3916,50 @@ bool IsEnemyFleeing(Unit const* unit)
     if (!unit || !unit->IsAlive() || !unit->IsCreature())
         return false;
 
-    if (unit->HasUnitState(UNIT_STATE_FLEEING))
-        return true;
+    // Engine flee (low HP run) — same flags used in NearestHostileUnitCheck / CCed()
+    return unit->HasUnitState(UNIT_STATE_FLEEING | UNIT_STATE_FLEEING_MOVE);
+}
 
-    if (unit->ToCreature()->IsInEvadeMode())
-        return true;
+bool ShouldBotFocusFleeingEnemy(bot_ai const* ai)
+{
+    // Only DPS focus-fire runners; main tank and off-tank stay on their assignments
+    return ai->HasRole(BOT_ROLE_DPS) && !ai->IsTank() && !ai->IsOffTank();
+}
 
-    if (unit->GetMotionMaster()->GetCurrentMovementGeneratorType() == FLEEING_MOTION_TYPE)
-        return true;
+// By leewheel 20260531 - per-dungeon policy for DPS chasing UNIT_STATE_FLEEING targets
+enum class BotFleeingFocusPolicy : uint8
+{
+    WhenNoTarget = 0,       // default: only if bot has no valid attack target
+    PrioritizeFleeing = 1,  // DPS may switch off boss/other targets to kill runners
+    Never = 2               // never auto-focus fleeing (instance override)
+};
 
-    return false;
+BotFleeingFocusPolicy GetFleeingFocusPolicyForMap(uint32 mapId)
+{
+    switch (mapId)
+    {
+        // Add per-dungeon rules here when needed, e.g.:
+        // case 533: return BotFleeingFocusPolicy::PrioritizeFleeing; // Naxxramas
+        default:
+            return BotFleeingFocusPolicy::WhenNoTarget;
+    }
+}
+
+bool ShouldDpsChaseFleeingTarget(bot_ai const* ai, bool hasValidAttackTarget, uint32 mapId)
+{
+    if (!ShouldBotFocusFleeingEnemy(ai))
+        return false;
+
+    switch (GetFleeingFocusPolicyForMap(mapId))
+    {
+        case BotFleeingFocusPolicy::Never:
+            return false;
+        case BotFleeingFocusPolicy::PrioritizeFleeing:
+            return true;
+        case BotFleeingFocusPolicy::WhenNoTarget:
+        default:
+            return !hasValidAttackTarget;
+    }
 }
 
 constexpr float BOSS_ADD_MAX_DIST_FROM_BOSS = 80.f;
@@ -4025,10 +4059,8 @@ bool IsBossSpawnedAdd(Creature const* cre, Creature const* boss, Player const* o
         if (summon->GetSummonerGUID() == bossGuid)
             return true;
 
-    if (cre->IsSummon())
-        return true;
-
-    if (cre->GetMaxHealth() < boss->GetMaxHealth())
+    // Smaller adds spawned during the pull (exclude generic nearby trash with no boss link)
+    if (cre->GetMaxHealth() < boss->GetMaxHealth() / 4)
         return true;
 
     return false;
@@ -4563,24 +4595,107 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
     if (u && !IAmFree() && (master->IsInCombat() || u->IsInCombat())/* && !InDuel(u)*/ && !IsInBotParty(u) && (BotCfg::IsPvPEnabled() || !u->IsControlledByPlayer()) &&
         (!HasBotCommandState(BOT_COMMAND_STAY) || (!IsRanged() ? me->IsWithinMeleeRange(u) : me->GetDistance(u) < foldist)))
     {
-        if (!gr) // By leewheel 20260523
-            return { u, u };
+        return { u, u };
     }
 
     bool canAttack = mytar && CanBotAttack(mytar, byspell);
+
+    if (!canAttack)
+    {
+        //check attackers
+        u = nullptr;
+        for (Unit* att : me->getAttackers())
+            if (_canSwitchToTarget(u, att, byspell))
+                u = att;
+        if (!u && botPet)
+            for (Unit* att : botPet->getAttackers())
+                if (_canSwitchToTarget(u, att, byspell))
+                    u = att;
+        if (u)
+            return { u, u };
+    }
+
+    if (IAmFree() && IsWanderer() && !me->IsInCombat() && me->getAttackers().empty() && (evadeDelayTimer > 7500 || Feasting() || me->GetHealthPct() < 85.f))
+        return { nullptr, nullptr };
+
+    //check targets around
+    float maxdist = InitAttackRange(float(followdist + 10), ranged);
+    std::array<std::pair<Unit*, float>, 2u> ts{};
+    std::list<Unit*> unitList;
+    NearestHostileUnitCheck check(me, maxdist, byspell, this);
+    Bcore::UnitListSearcher searcher(master->ToUnit(), unitList, check);
+    Cell::VisitAllObjects(HasBotCommandState(BOT_COMMAND_STAY) ? me->ToUnit() : master->ToUnit(), searcher, maxdist);
+
+    // By leewheel 20260531 - instance boss adds (sticky targeting; only in dungeons/raids)
+    if (!IAmFree() && gr)
+    {
+        Map const* instanceMap = me->GetMap();
+        if (instanceMap && instanceMap->Instanceable())
+        {
+            bool const isRaid = instanceMap->IsRaid();
+            bool const isDungeon = instanceMap->IsDungeon() && !isRaid;
+
+            if (isRaid || isDungeon)
+            {
+                Creature const* boss = ResolveActiveInstanceBoss(me, mytar, master, unitList, BOSS_ADD_MAX_DIST_FROM_BOSS * 2.f);
+                if (boss)
+                {
+                    bool const wantAdd = (isRaid && IsOffTank()) || (HasRole(BOT_ROLE_DPS) && !IsTank());
+                    if (wantAdd)
+                    {
+                        if (mytar && mytar->ToCreature() && IsBossSpawnedAdd(mytar->ToCreature(), boss, master, gr))
+                        {
+                            if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
+                                reset = true;
+                            return { mytar, mytar };
+                        }
+
+                        if (Unit* add = SelectPriorityBossAdd(this, me, boss, master, gr, unitList, isRaid && IsOffTank(), byspell))
+                        {
+                            if (!mytar || mytar != add)
+                                reset = true;
+                            return { add, add };
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fleeing enemies (UNIT_STATE_FLEEING): DPS only; per-map policy (default: no current target)
+        if (ShouldDpsChaseFleeingTarget(this, canAttack, me->GetMapId()))
+        {
+            Unit* fleeingTarget = nullptr;
+            float fleeingDist = maxdist;
+            for (Unit* un : unitList)
+            {
+                if (IsEnemyFleeing(un) && CanBotAttack(un, byspell))
+                {
+                    float dist = me->GetDistance(un);
+                    if (!fleeingTarget || dist < fleeingDist)
+                    {
+                        fleeingTarget = un;
+                        fleeingDist = dist;
+                    }
+                }
+            }
+            if (fleeingTarget)
+            {
+                reset = true;
+                return { fleeingTarget, fleeingTarget };
+            }
+        }
+    }
+    // end By leewheel 20260531
+
     if (canAttack && (!IAmFree() || me->GetDistance(mytar) < float(BOT_MAX_CHASE_RANGE)) &&/* !InDuel(mytar) &&*/
         !(mytar->GetVictim() != nullptr && IsTank() && IsTank(mytar->GetVictim())))
     {
-        if (!gr || IsEnemyFleeing(mytar)) // By leewheel 20260523
-        {
-            //BOT_LOG_ERROR("entities.player", "bot {} continues attack its target {}", me->GetName(), mytar->GetName());
-            if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
-                reset = true;
-            return { mytar, mytar };
-        }
+        if (me->GetDistance(mytar) > (ranged ? 20.f : 5.f) && !HasBotCommandState(BOT_COMMAND_MASK_UNCHASE))
+            reset = true;
+        return { mytar, mytar };
     }
 
-    //check group
+    //check group (after sticky target - matches upstream; avoids per-tick victim stealing in LFG/raid)
     if (!IAmFree())
     {
         if (!gr)
@@ -4628,84 +4743,6 @@ std::pair<Unit*, Unit*> bot_ai::_getTargets(bool byspell, bool ranged, bool &res
             }
         }
     }
-    else if (!canAttack)
-    {
-        //check attackers
-        u = nullptr;
-        for (Unit* att : me->getAttackers())
-            if (_canSwitchToTarget(u, att, byspell))
-                u = att;
-        if (!u && botPet)
-            for (Unit* att : botPet->getAttackers())
-                if (_canSwitchToTarget(u, att, byspell))
-                    u = att;
-        if (u)
-            return { u, u };
-    }
-
-    if (IAmFree() && IsWanderer() && !me->IsInCombat() && me->getAttackers().empty() && (evadeDelayTimer > 7500 || Feasting() || me->GetHealthPct() < 85.f))
-        return { nullptr, nullptr };
-
-    //check targets around
-    float maxdist = InitAttackRange(float(followdist + 10), ranged);
-    std::array<std::pair<Unit*, float>, 2u> ts{};
-    std::list<Unit*> unitList;
-    NearestHostileUnitCheck check(me, maxdist, byspell, this);
-    Bcore::UnitListSearcher searcher(master->ToUnit(), unitList, check);
-    Cell::VisitAllObjects(HasBotCommandState(BOT_COMMAND_STAY) ? me->ToUnit() : master->ToUnit(), searcher, maxdist);
-
-    // By leewheel 20260523
-    if (!IAmFree() && gr)
-    {
-        Unit* fleeingTarget = nullptr;
-        float fleeingDist = maxdist;
-        for (Unit* un : unitList)
-        {
-            if (IsEnemyFleeing(un) && CanBotAttack(un, byspell))
-            {
-                float dist = me->GetDistance(un);
-                if (!fleeingTarget || dist < fleeingDist)
-                {
-                    fleeingTarget = un;
-                    fleeingDist = dist;
-                }
-            }
-        }
-        if (fleeingTarget)
-        {
-            if (!mytar || mytar != fleeingTarget)
-                reset = true;
-            return { fleeingTarget, fleeingTarget };
-        }
-
-        // By leewheel 20260531 - instance boss adds: DPS burn adds; raid off-tank picks them up
-        Map const* instanceMap = me->GetMap();
-        if (instanceMap && instanceMap->Instanceable())
-        {
-            bool const isRaid = instanceMap->IsRaid();
-            bool const isDungeon = instanceMap->IsDungeon() && !isRaid;
-
-            if (isRaid || isDungeon)
-            {
-                Creature const* boss = ResolveActiveInstanceBoss(me, mytar, master, unitList, BOSS_ADD_MAX_DIST_FROM_BOSS * 2.f);
-                if (boss)
-                {
-                    bool const wantAdd = (isRaid && IsOffTank()) || (HasRole(BOT_ROLE_DPS) && !IsTank());
-                    if (wantAdd)
-                    {
-                        if (Unit* add = SelectPriorityBossAdd(this, me, boss, master, gr, unitList, isRaid && IsOffTank(), byspell))
-                        {
-                            if (!mytar || mytar != add)
-                                reset = true;
-                            return { add, add };
-                        }
-                    }
-                }
-            }
-        }
-        // end By leewheel 20260531
-    }
-    // end By leewheel 20260523
 
     if (IAmFree())
     {
