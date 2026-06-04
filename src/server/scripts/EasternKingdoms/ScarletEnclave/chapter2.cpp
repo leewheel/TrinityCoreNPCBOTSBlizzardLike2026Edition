@@ -1161,7 +1161,7 @@ class spell_portal_effect_acherus : public SpellScript
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_portal_effect_acherus::CheckCast);
-        OnEffectHitTarget += SpellEffectFn(spell_portal_effect_acherus::HandleScriptEffect, EFFECT_0, SPELL_EFFECT_SCRIPT_EFFECT);
+        OnEffectHitTarget += SpellEffectFn(spell_portal_effect_acherus::HandleScriptEffect, EFFECT_FIRST_FOUND, SPELL_EFFECT_ANY);
     }
 };
 

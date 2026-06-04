@@ -1162,27 +1162,6 @@ class spell_pos_blight_aura : public AuraScript
     }
 };
 
-class spell_pos_glacial_strike_aura : public AuraScript
-{
-    PrepareAuraScript(spell_pos_glacial_strike_aura);
-
-    void HandleEffectPeriodic(AuraEffect const* aurEff)
-    {
-        if (Unit* target = GetTarget())
-            if (target->GetHealth() == target->GetMaxHealth())
-            {
-                PreventDefaultAction();
-                aurEff->GetBase()->Remove(AURA_REMOVE_BY_EXPIRE);
-                return;
-            }
-    }
-
-    void Register() override
-    {
-        OnEffectPeriodic += AuraEffectPeriodicFn(spell_pos_glacial_strike_aura::HandleEffectPeriodic, EFFECT_2, SPELL_AURA_PERIODIC_DAMAGE_PERCENT);
-    }
-};
-
 // ===== TC existing content (monster AIs, icicle, achievements) =====
 
 enum Spells
@@ -1455,7 +1434,6 @@ void AddSC_pit_of_saron()
     RegisterSpellScript(spell_pos_slave_trigger_closest);
     RegisterSpellScript(spell_pos_rimefang_frost_nova);
     RegisterSpellScript(spell_pos_blight_aura);
-    RegisterSpellScript(spell_pos_glacial_strike_aura);
 
     // TC existing monster AIs, icicles and achievements
     RegisterPitOfSaronCreatureAI(npc_ymirjar_flamebearer);
