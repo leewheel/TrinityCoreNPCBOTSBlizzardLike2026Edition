@@ -1,4 +1,3 @@
--- 来自 Dusk-Ts-TC 的移植：缺失的 spell_script_names 注册
 -- 这些法术脚本已通过 C++ 代码添加，需要在数据库中注册才能生效
 -- 适用版本：TrinityCore 3.3.5 with NPCBots
 
