@@ -529,14 +529,9 @@ public:
 
     void StartEvents()
     {
-        // Game event 17 must be started so that NPCs bound via game_event_creature spawn.
-        // Defer to caller (WorldScript) to ensure maps are fully initialized.
-        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
-        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES, true);
-
-        // Set initial timers if not already set
+        // Set initial timers if not already set (BEFORE game event start,
+        // because GameEventMgr::StartEvent triggers RunSmartAIScripts which
+        // may crash if maps aren't fully ready)
         TimePoint now = std::chrono::steady_clock::now();
         for (auto const& def : g_invasionZoneDefs)
         {
@@ -548,6 +543,13 @@ public:
             if (_data.timers[def.timerIdx] == TimePoint())
                 _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(600, 1200));
         }
+
+        // Game event 17 must be started so that NPCs bound via game_event_creature spawn.
+        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
+            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
+        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
+            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES, true);
+
         SaveToDB();
         BroadcastWorldStates();
     }
@@ -1349,8 +1351,8 @@ public:
         handler->SendSysMessage("===== 天灾入侵状态 =====");
 
         SIState state = sScourgeInvasionMgr->GetState();
-        handler->PSendSysMessage("系统状态: {}", state == SI_STATE_ENABLED ? "|cff00ff00已启用|r" : "|cffff0000已禁用|r");
-        handler->PSendSysMessage("已击败入侵: {} 次", sScourgeInvasionMgr->GetBattlesWon());
+        handler->PSendSysMessage("系统状态: %s", state == SI_STATE_ENABLED ? "|cff00ff00已启用|r" : "|cffff0000已禁用|r");
+        handler->PSendSysMessage("已击败入侵: %u 次", sScourgeInvasionMgr->GetBattlesWon());
 
         handler->SendSysMessage("--- 区域入侵 ---");
         static std::pair<uint32, std::string_view> const zoneNames[] =
@@ -1369,7 +1371,7 @@ public:
             uint32 remaining = sScourgeInvasionMgr->GetSIRemainingByZone(zoneId);
             if (remaining > 0)
             {
-                handler->PSendSysMessage("{}: |cffff0000战斗中|r (剩余 {} 个浮空城)", name, remaining);
+                handler->PSendSysMessage("%s: |cffff0000战斗中|r (剩余 %u 个浮空城)", std::string(name).c_str(), remaining);
             }
             else
             {
@@ -1383,12 +1385,13 @@ public:
                         if (tp != TimePoint())
                         {
                             auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
-                            timerSecs = std::max<uint32>(0, static_cast<uint32>(secs));
+                            if (secs > 0)
+                                timerSecs = static_cast<uint32>(secs);
                         }
                         break;
                     }
                 }
-                handler->PSendSysMessage("{}: |cff00ff00待命中|r (下次 {} )", name, FormatRemaining(timerSecs));
+                handler->PSendSysMessage("%s: |cff00ff00待命中|r (下次 %s)", std::string(name).c_str(), FormatRemaining(timerSecs).c_str());
             }
         }
 
@@ -1407,14 +1410,15 @@ public:
             if (tp != TimePoint())
             {
                 auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
-                timerSecs = std::max<uint32>(0, static_cast<uint32>(secs));
+                if (secs > 0)
+                    timerSecs = static_cast<uint32>(secs);
             }
 
             ObjectGuid pallidGuid = sScourgeInvasionMgr->GetPallidGuid(zoneId);
             if (!pallidGuid.IsEmpty())
-                handler->PSendSysMessage("{}: |cffff0000遭到袭击中|r", name);
+                handler->PSendSysMessage("%s: |cffff0000遭到袭击中|r", std::string(name).c_str());
             else
-                handler->PSendSysMessage("{}: |cff00ff00安全|r (下次 {} )", name, FormatRemaining(timerSecs));
+                handler->PSendSysMessage("%s: |cff00ff00安全|r (下次 %s)", std::string(name).c_str(), FormatRemaining(timerSecs).c_str());
         }
 
         return true;
