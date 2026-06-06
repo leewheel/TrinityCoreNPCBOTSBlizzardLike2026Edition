@@ -10,6 +10,7 @@
 #include "botspell.h"
 #include "bottext.h"
 #include "bpet_ai.h"
+#include "CellImpl.h"
 #include "Chat.h"
 #include "CombatPackets.h"
 #include "Config.h"
@@ -2068,6 +2069,33 @@ void BotMgr::OnVehicleAttackedBy(Unit* attacker, Unit const* victim)
 void BotMgr::OnBotDamageTaken(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellInfo const* spellInfo)
 {
     victim->ToCreature()->GetBotAI()->OnBotDamageTaken(attacker, damage, cleanDamage , damagetype, spellInfo);
+
+    // By leewheel 20260609 - wanderer bot PvP assault: push scene event for proactive chat response
+    if (victim && victim->IsAlive() && attacker && attacker->IsPlayer())
+    {
+        Creature* bot = victim->ToCreature();
+        if (bot->IsNPCBot())
+        {
+            BotDataMgr::PushBotChatPvpAssaultEvent(bot, attacker->GetName());
+
+            // Call nearby same-faction NPC bots (600码) to assist
+            std::list<Creature*> helpers;
+            Trinity::AllWorldObjectsInRange rangeCheck(bot, 600.0f);
+            Trinity::CreatureListSearcher<Trinity::AllWorldObjectsInRange> searcher(bot, helpers, rangeCheck);
+            Cell::VisitGridObjects(bot, searcher, 600.0f);
+            for (Creature* helper : helpers)
+            {
+                if (helper == bot || !helper->IsNPCBot() || !helper->IsAlive() || helper->IsInCombat())
+                    continue;
+                if (!helper->GetBotAI())
+                    continue;
+                if (!helper->IsValidAttackTarget(attacker))
+                    continue;
+                helper->SetInCombatWith(attacker);
+                helper->Attack(attacker, true);
+            }
+        }
+    }
 }
 
 void BotMgr::OnBotDamageDealt(Unit* attacker, Unit* victim, uint32 damage, CleanDamage const* cleanDamage, DamageEffectType damagetype, SpellInfo const* spellInfo)

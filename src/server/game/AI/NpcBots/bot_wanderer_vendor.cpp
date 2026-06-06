@@ -82,29 +82,38 @@ namespace
 
     bool IsVendorTradeMaterial(ItemTemplate const* proto)
     {
-        if (!proto || proto->Class != ITEM_CLASS_TRADE_GOODS)
+        if (!proto)
             return false;
 
-        switch (proto->SubClass)
+        // Trade goods
+        if (proto->Class == ITEM_CLASS_TRADE_GOODS)
         {
-            case ITEM_SUBCLASS_TRADE_GOODS:
-            case ITEM_SUBCLASS_PARTS:
-            case ITEM_SUBCLASS_JEWELCRAFTING:
-            case ITEM_SUBCLASS_CLOTH:
-            case ITEM_SUBCLASS_LEATHER:
-            case ITEM_SUBCLASS_METAL_STONE:
-            case ITEM_SUBCLASS_HERB:
-            case ITEM_SUBCLASS_ELEMENTAL:
-            case ITEM_SUBCLASS_ENCHANTING:
-            case ITEM_SUBCLASS_MATERIAL:
-            case ITEM_SUBCLASS_ARMOR_ENCHANTMENT:
-            case ITEM_SUBCLASS_WEAPON_ENCHANTMENT:
-                break;
-            default:
-                return false;
+            switch (proto->SubClass)
+            {
+                case ITEM_SUBCLASS_TRADE_GOODS:
+                case ITEM_SUBCLASS_PARTS:
+                case ITEM_SUBCLASS_JEWELCRAFTING:
+                case ITEM_SUBCLASS_CLOTH:
+                case ITEM_SUBCLASS_LEATHER:
+                case ITEM_SUBCLASS_METAL_STONE:
+                case ITEM_SUBCLASS_HERB:
+                case ITEM_SUBCLASS_ELEMENTAL:
+                case ITEM_SUBCLASS_ENCHANTING:
+                case ITEM_SUBCLASS_MATERIAL:
+                case ITEM_SUBCLASS_ARMOR_ENCHANTMENT:
+                case ITEM_SUBCLASS_WEAPON_ENCHANTMENT:
+                    break;
+                default:
+                    return false;
+            }
+            return proto->Quality >= ITEM_QUALITY_UNCOMMON && proto->Stackable > 1;
         }
 
-        return proto->Quality >= ITEM_QUALITY_UNCOMMON && proto->Stackable > 1;
+        // Glyphs
+        if (proto->Class == ITEM_CLASS_GLYPH)
+            return true;
+
+        return false;
     }
 
     bool IsVendorScrollOrGem(ItemTemplate const* proto)
@@ -112,6 +121,8 @@ namespace
         if (!proto)
             return false;
         if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_SCROLL)
+            return proto->Quality >= ITEM_QUALITY_UNCOMMON;
+        if (proto->Class == ITEM_CLASS_CONSUMABLE && proto->SubClass == ITEM_SUBCLASS_ITEM_ENHANCEMENT)
             return proto->Quality >= ITEM_QUALITY_UNCOMMON;
         if (proto->Class == ITEM_CLASS_GEM)
             return proto->Quality >= ITEM_QUALITY_UNCOMMON;
@@ -513,8 +524,63 @@ std::string WandererVendor::BuildTradeShoutFallback(Creature const* bot)
     if (!offer || !offer->active)
         return {};
 
-    return Bcore::StringFormat("[出售]{} 起拍{}，密我「{}」谈价。",
-        GetItemDisplayName(offer->itemEntry, offer->itemCount), FormatGold(offer->askCopper), bot->GetName());
+    std::string itemName = GetItemDisplayName(offer->itemEntry, offer->itemCount);
+    std::string priceStr = FormatGold(offer->askCopper);
+    std::string botName = bot->GetName();
+
+    // Build a descriptive hint about the item type
+    std::string typeHint;
+    if (offer->isMaterial)
+    {
+        ItemTemplate const* proto = sObjectMgr->GetItemTemplate(offer->itemEntry);
+        if (proto)
+        {
+            if (proto->Class == ITEM_CLASS_GLYPH)
+                typeHint = "铭文";
+            else if (proto->SubClass == ITEM_SUBCLASS_ARMOR_ENCHANTMENT)
+                typeHint = "护甲片";
+            else if (proto->SubClass == ITEM_SUBCLASS_WEAPON_ENCHANTMENT)
+                typeHint = "武器附魔";
+            else if (proto->SubClass == ITEM_SUBCLASS_SCROLL)
+                typeHint = "卷轴";
+            else if (proto->Class == ITEM_CLASS_GEM)
+                typeHint = "宝石";
+            else if (proto->SubClass == ITEM_SUBCLASS_ENCHANTING)
+                typeHint = "附魔材料";
+            else if (proto->SubClass == ITEM_SUBCLASS_HERB)
+                typeHint = "草药";
+            else if (proto->SubClass == ITEM_SUBCLASS_CLOTH)
+                typeHint = "布料";
+            else if (proto->SubClass == ITEM_SUBCLASS_LEATHER)
+                typeHint = "皮革";
+            else if (proto->SubClass == ITEM_SUBCLASS_METAL_STONE)
+                typeHint = "矿石";
+            else if (proto->SubClass == ITEM_SUBCLASS_ELEMENTAL)
+                typeHint = "元素材料";
+        }
+    }
+
+    // Randomize shout template
+    static constexpr std::string_view const shoutTemplates[] = {
+        "[出售]{} 起拍{}，密我「{}」谈价。",
+        "[叫卖]{}！只要{}！要的密「{}」",
+        "[商机]搞到个好东西——{}，{}带走，{}",
+        "[吆喝]来看一看啊！{}，{}起，找{}",
+    };
+
+    if (!typeHint.empty())
+    {
+        static constexpr std::string_view const materialShouts[] = {
+            "[出售]{} 「{}」{}起，刚出炉的，{}来？",
+            "[叫卖]搞到一批{}，有需要的找我「{}」，{}起",
+            "[商机]{} 处理了，{}起，直接密「{}」",
+        };
+        uint32 idx = urand(0, 2);
+        return Bcore::StringFormat(fmt::runtime(materialShouts[idx]), itemName, botName, priceStr, typeHint);
+    }
+
+    uint32 idx = urand(0, 3);
+    return Bcore::StringFormat(fmt::runtime(shoutTemplates[idx]), itemName, priceStr, botName);
 }
 
 bool WandererVendor::TryHandlePlayerWhisper(Player* player, Creature* bot, std::string_view message)

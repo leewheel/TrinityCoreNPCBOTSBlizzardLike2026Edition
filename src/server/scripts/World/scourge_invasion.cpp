@@ -1,5 +1,6 @@
 /*
- * This file is part of the TrinityCore Project. See AUTHORS file for Copyright information
+ * This file is part of the LWCore Project.
+ * Ported from AzerothCore with modifications for TrinityCore framework.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License as published by the
@@ -17,6 +18,8 @@
 
 #include "scourge_invasion.h"
 #include "CellImpl.h"
+#include "ChannelMgr.h"
+#include "Chat.h"
 #include "Containers.h"
 #include "Creature.h"
 #include "CreatureAI.h"
@@ -41,6 +44,9 @@
 #include "WeatherMgr.h"
 #include "World.h"
 #include "WorldSession.h"
+
+using namespace Trinity::ChatCommands;
+
 #include <mutex>
 #include <set>
 #include <map>
@@ -143,9 +149,6 @@ public:
                     _data.timers[SI_TIMER_STORMWIND] = std::chrono::steady_clock::now() + std::chrono::seconds(attackTimer);
             }
         } while (result->NextRow());
-
-        if (_data.state == SI_STATE_ENABLED)
-            StartEvents();
     }
 
     void SaveToDB()
@@ -263,7 +266,11 @@ public:
                 case AREA_BURNING_STEPPES:     wsId = WORLD_STATE_SCOURGE_INVASION_BURNING_STEPPES; break;
             }
             if (wsId)
-                sendWS(wsId, active ? 1 : 0);
+            {
+                uint32 value = active ? 1 : 0;
+                sendWS(wsId, value);
+                sWorld->setWorldState(wsId, value);
+            }
 
             uint32 wsNecroId = 0;
             switch (def.zoneId)
@@ -276,7 +283,10 @@ public:
                 case AREA_BURNING_STEPPES:     wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_BURNING_STEPPES; break;
             }
             if (wsNecroId)
+            {
                 sendWS(wsNecroId, _data.remaining[def.remainingIdx]);
+                sWorld->setWorldState(wsNecroId, _data.remaining[def.remainingIdx]);
+            }
         }
         sWorld->SendGlobalMessage(&data);
     }
@@ -517,13 +527,10 @@ public:
             sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS, true);
     }
 
-private:
-    ScourgeInvasionData _data;
-
-    ScourgeInvasionMgr() = default;
-
     void StartEvents()
     {
+        // Game event 17 must be started so that NPCs bound via game_event_creature spawn.
+        // Defer to caller (WorldScript) to ensure maps are fully initialized.
         if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
             sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
         if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
@@ -542,6 +549,7 @@ private:
                 _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(600, 1200));
         }
         SaveToDB();
+        BroadcastWorldStates();
     }
 
     void StopEvents()
@@ -560,6 +568,11 @@ private:
         BroadcastWorldStates();
         SaveToDB();
     }
+
+private:
+    ScourgeInvasionData _data;
+
+    ScourgeInvasionMgr() = default;
 };
 
 #define sScourgeInvasionMgr ScourgeInvasionMgr::instance()
@@ -975,12 +988,37 @@ struct npc_cultist_engineer : public ScriptedAI
         }
     }
 
-    bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 /*gossipListId*/) override
+    bool OnGossipHello(Player* player) override
     {
-        CloseGossipMenuFor(player);
-        player->DestroyItemCount(ITEM_NECROTIC_RUNE, 8, true);
-        player->CastSpell(nullptr, SPELL_SUMMON_BOSS, true);
-        DoCastSelf(SPELL_QUIET_SUICIDE, true);
+        if (player->HasItemCount(ITEM_NECROTIC_RUNE, 8))
+        {
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "召唤首领（消耗 8 个死亡符文）", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
+            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+        }
+        else
+        {
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "我需要 8 个死亡符文才能召唤首领", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2);
+            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
+        }
+        return true;
+    }
+
+    bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
+    {
+        uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
+        ClearGossipMenuFor(player);
+
+        if (action == GOSSIP_ACTION_INFO_DEF + 1)
+        {
+            CloseGossipMenuFor(player);
+            player->DestroyItemCount(ITEM_NECROTIC_RUNE, 8, true);
+            player->CastSpell(nullptr, SPELL_SUMMON_BOSS, true);
+            DoCastSelf(SPELL_QUIET_SUICIDE, true);
+        }
+        else
+        {
+            CloseGossipMenuFor(player);
+        }
         return true;
     }
 
@@ -1217,8 +1255,177 @@ private:
     uint32 _updateTimer = 0;
 };
 
+// ===== WorldScript: Initialize on server startup =====
+
+struct ScourgeInvasionWorldScript : public WorldScript
+{
+    ScourgeInvasionWorldScript() : WorldScript("ScourgeInvasionWorldScript"), _timer(0), _eventsStarted(false) { }
+
+    void OnStartup() override
+    {
+        sScourgeInvasionMgr->LoadFromDB();
+    }
+
+    void OnUpdate(uint32 diff) override
+    {
+        if (_eventsStarted)
+            return;
+
+        _timer += diff;
+        // Wait 30 seconds to ensure all maps and objects are fully initialized
+        if (_timer >= 30000)
+        {
+            _eventsStarted = true;
+
+            // Auto-create World channel
+            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
+                channelMgr->CreateCustomChannel("世界");
+            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
+                channelMgr->CreateCustomChannel("世界");
+
+            // Auto-join all currently online players to "世界" channel
+            SessionMap const& sessions = sWorld->GetAllSessions();
+            for (auto const& sessionPair : sessions)
+            {
+                Player* player = sessionPair.second->GetPlayer();
+                if (!player || !player->IsInWorld())
+                    continue;
+                if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
+                    mgr->GetChannel(0, "世界", player);
+            }
+
+            if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
+                sScourgeInvasionMgr->StartEvents();
+        }
+    }
+
+private:
+    uint32 _timer;
+    bool _eventsStarted;
+};
+
+// ===== PlayerScript: Auto-join "世界" channel on login =====
+
+class ScourgeInvasionPlayerScript : public PlayerScript
+{
+public:
+    ScourgeInvasionPlayerScript() : PlayerScript("ScourgeInvasionPlayerScript") { }
+
+    void OnLogin(Player* player, bool /*firstLogin*/) override
+    {
+        if (!player)
+            return;
+        if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
+            mgr->GetChannel(0, "世界", player);
+    }
+};
+
+// ===== Command: .si — Scourge Invasion status =====
+
+class scourge_invasion_commandscript : public CommandScript
+{
+public:
+    scourge_invasion_commandscript() : CommandScript("scourge_invasion_commandscript") { }
+
+    ChatCommandTable GetCommands() const override
+    {
+        static ChatCommandTable siCommandTable =
+        {
+            { "si", HandleSICommand, rbac::RBAC_PERM_COMMAND_EVENT_INFO, Console::Yes },
+        };
+        return siCommandTable;
+    }
+
+    static std::string FormatRemaining(uint32 secs)
+    {
+        if (secs == 0) return "即将开始";
+        uint32 mins = secs / 60;
+        uint32 sec = secs % 60;
+        return fmt::format("{}分{}秒", mins, sec);
+    }
+
+    static bool HandleSICommand(ChatHandler* handler)
+    {
+        handler->SendSysMessage("===== 天灾入侵状态 =====");
+
+        SIState state = sScourgeInvasionMgr->GetState();
+        handler->PSendSysMessage("系统状态: {}", state == SI_STATE_ENABLED ? "|cff00ff00已启用|r" : "|cffff0000已禁用|r");
+        handler->PSendSysMessage("已击败入侵: {} 次", sScourgeInvasionMgr->GetBattlesWon());
+
+        handler->SendSysMessage("--- 区域入侵 ---");
+        static std::pair<uint32, std::string_view> const zoneNames[] =
+        {
+            { 618, "冬泉谷" },
+            { 440, "塔纳利斯" },
+            { 16,  "艾萨拉" },
+            { 4,   "诅咒之地" },
+            { 139, "东瘟疫之地" },
+            { 46,  "燃烧平原" },
+        };
+
+        auto now = std::chrono::steady_clock::now();
+        for (auto const& [zoneId, name] : zoneNames)
+        {
+            uint32 remaining = sScourgeInvasionMgr->GetSIRemainingByZone(zoneId);
+            if (remaining > 0)
+            {
+                handler->PSendSysMessage("{}: |cffff0000战斗中|r (剩余 {} 个浮空城)", name, remaining);
+            }
+            else
+            {
+                // Find timer
+                uint32 timerSecs = 0;
+                for (auto const& def : g_invasionZoneDefs)
+                {
+                    if (def.zoneId == zoneId)
+                    {
+                        auto tp = sScourgeInvasionMgr->GetSITimer(def.timerIdx);
+                        if (tp != TimePoint())
+                        {
+                            auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
+                            timerSecs = std::max<uint32>(0, static_cast<uint32>(secs));
+                        }
+                        break;
+                    }
+                }
+                handler->PSendSysMessage("{}: |cff00ff00待命中|r (下次 {} )", name, FormatRemaining(timerSecs));
+            }
+        }
+
+        handler->SendSysMessage("--- 主城袭击 ---");
+        static std::pair<uint32, std::string_view> const cityNames[] =
+        {
+            { 1497, "幽暗城" },
+            { 1519, "暴风城" },
+        };
+
+        for (auto const& [zoneId, name] : cityNames)
+        {
+            uint32 timerSecs = 0;
+            SITimers timerIdx = (zoneId == AREA_UNDERCITY) ? SI_TIMER_UNDERCITY : SI_TIMER_STORMWIND;
+            auto tp = sScourgeInvasionMgr->GetSITimer(timerIdx);
+            if (tp != TimePoint())
+            {
+                auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
+                timerSecs = std::max<uint32>(0, static_cast<uint32>(secs));
+            }
+
+            ObjectGuid pallidGuid = sScourgeInvasionMgr->GetPallidGuid(zoneId);
+            if (!pallidGuid.IsEmpty())
+                handler->PSendSysMessage("{}: |cffff0000遭到袭击中|r", name);
+            else
+                handler->PSendSysMessage("{}: |cff00ff00安全|r (下次 {} )", name, FormatRemaining(timerSecs));
+        }
+
+        return true;
+    }
+};
+
 void AddSC_scourge_invasion()
 {
+    new ScourgeInvasionWorldScript();
+    new ScourgeInvasionPlayerScript();
+    new scourge_invasion_commandscript();
     RegisterGameObjectAI(go_necropolis);
     RegisterCreatureAI(npc_herald_of_the_lich_king);
     RegisterCreatureAI(npc_necropolis);

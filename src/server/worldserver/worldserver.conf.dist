@@ -1244,7 +1244,7 @@ FlashAtStart = 1
 #        Example:     "Welcome to John's Server!@This server is proud to be powered by Trinity Core."
 #        Default:     "Welcome to a Trinity Core server."
 
-Motd = "Welcome to a Trinity Core server."
+Motd = "欢迎来到LWCore Wotlk模拟器，本版本基于TrinityCore开发，祝游戏愉快！"
 
 #
 #    Server.LoginInfo

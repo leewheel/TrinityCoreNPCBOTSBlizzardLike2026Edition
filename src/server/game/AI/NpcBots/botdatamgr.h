@@ -226,6 +226,7 @@ public:
     static void UpdateBotAmbientChat(Creature* bot, uint32 diff);
     static void PushBotChatPvpDefeatEvent(Creature const* bot, std::string_view killerName);
     static void PushBotChatPvpKillEvent(Creature const* bot, std::string_view victimName);
+    static void PushBotChatPvpAssaultEvent(Creature const* bot, std::string_view attackerName);
     static void OnPlayerChannelChat(Player const* player, std::string_view channelName, std::string_view message, Group const* group = nullptr);
     // By leewheel 20260529 - wanderer greet tick + vendor stock refresh (no right-click trade).
     static void UpdateWandererSocial(Creature* bot);

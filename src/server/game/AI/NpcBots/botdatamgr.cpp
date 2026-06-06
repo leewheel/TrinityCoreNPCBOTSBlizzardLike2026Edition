@@ -778,7 +778,12 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         channelStyle = "在世界频道吆喝出售装绑装备，必须含物品名与起拍价，并提示密语你谈价，一句话，像真人跳蚤市场";
     }
     else if (channelHint == "世界频道")
-        channelStyle = "可轻度挑衅和阵营喊话，但不要低俗刷屏";
+    {
+        if (recentEvent.find("event=PVP_ASSAULT") != std::string::npos)
+            channelStyle = "被敌对阵营玩家偷袭正在战斗中，立即在世界频道喊救命和坐标，语气紧急";
+        else
+            channelStyle = "可轻度挑衅和阵营喊话，但不要低俗刷屏";
+    }
     else if (channelHint == "小队频道" || channelHint == "团队频道")
     {
         if (bot->IsInCombat())
@@ -915,7 +920,12 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
         if (channelHint == "小队频道" || channelHint == "团队频道" || channelHint == "密语")
             persona = PickPartySocialFallback(bot, ExtractSceneEventField(recentEvent, "text"));
         else if (channelHint == "世界频道")
-            persona = "有人在吗，一起刷刷？";
+        {
+            if (!pvpKiller.empty())
+                persona = worldCall;
+            else
+                persona = "有人在吗，一起刷刷？";
+        }
         else
             persona = "收到。";
     }
@@ -1112,6 +1122,40 @@ static void TryBotChannelChat(uint32 diff)
         (bot->IsWandererBot() || urgentReply || !partyChannel);
     if (!sent && allowWorldAutonomous && !partyChannel)
     {
+        // Build colored name prefix for world channel messages
+        std::string namePrefix;
+        if (bot->IsNPCBot())
+        {
+            std::string_view classColor;
+            std::string_view className;
+            switch (bot->GetBotClass())
+            {
+                case BOT_CLASS_WARRIOR:      classColor = "|cffc79c6e"; className = "战士"; break;
+                case BOT_CLASS_PALADIN:      classColor = "|cfff58cba"; className = "圣骑士"; break;
+                case BOT_CLASS_HUNTER:       classColor = "|cffabd473"; className = "猎人"; break;
+                case BOT_CLASS_ROGUE:        classColor = "|cfffff569"; className = "潜行者"; break;
+                case BOT_CLASS_PRIEST:       classColor = "|cffffffff"; className = "牧师"; break;
+                case BOT_CLASS_DEATH_KNIGHT: classColor = "|cffc41f3b"; className = "死亡骑士"; break;
+                case BOT_CLASS_SHAMAN:       classColor = "|cff0070de"; className = "萨满"; break;
+                case BOT_CLASS_MAGE:         classColor = "|cff69ccf0"; className = "法师"; break;
+                case BOT_CLASS_WARLOCK:      classColor = "|cff9482c9"; className = "术士"; break;
+                case BOT_CLASS_DRUID:        classColor = "|cffff7d0a"; className = "德鲁伊"; break;
+                case BOT_CLASS_BM:           classColor = "|cffa10015"; className = "剑圣"; break;
+                case BOT_CLASS_ARCHMAGE:     classColor = "|cff028a99"; className = "大法师"; break;
+                case BOT_CLASS_DREADLORD:    classColor = "|cff534161"; className = "恐惧魔王"; break;
+                case BOT_CLASS_SPELLBREAKER: classColor = "|cffcf3c1f"; className = "破法者"; break;
+                case BOT_CLASS_DARK_RANGER:  classColor = "|cff3e255e"; className = "黑暗游侠"; break;
+                case BOT_CLASS_NECROMANCER:  classColor = "|cff9900cc"; className = "亡灵法师"; break;
+                case BOT_CLASS_SEA_WITCH:    classColor = "|cff40d7a9"; className = "海巫"; break;
+                case BOT_CLASS_CRYPT_LORD:   classColor = "|cff19782b"; className = "地穴领主"; break;
+                default: break;
+            }
+            if (!classColor.empty())
+                namePrefix = Bcore::StringFormat("{}[{}]|r {}: ", classColor, className, bot->GetName());
+        }
+        if (namePrefix.empty())
+            namePrefix = bot->GetName() + std::string(": ");
+        std::string worldMsg = namePrefix + msg;
         std::string const outChannel = (!urgentChannel.empty() ? urgentChannel : BotCfg::GetBotChatWorldChannelName());
         Map* outMap = sMapMgr->CreateBaseMap(urgentMapId);
         if (!outMap)
@@ -1122,7 +1166,7 @@ static void TryBotChannelChat(uint32 diff)
             if (!player || !player->GetSession())
                 continue;
             WorldPackets::Chat::Chat packet;
-            packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, msg, 0, outChannel);
+            packet.Initialize(CHAT_MSG_CHANNEL, LANG_UNIVERSAL, bot, nullptr, worldMsg, 0, outChannel);
             player->SendDirectMessage(packet.Write());
         }
         sent = outMap && outMap->HavePlayers();
@@ -2328,6 +2372,20 @@ void BotDataMgr::PushBotChatPvpKillEvent(Creature const* bot, std::string_view v
     RememberPvpVictimByEntry(bot->GetEntry(), victimName);
     _botChatPvpLoseStreak[bot->GetEntry()] = 0;
     _botChatPvpWinStreak[bot->GetEntry()] = std::min<uint8>(10, uint8(_botChatPvpWinStreak[bot->GetEntry()] + 1));
+}
+
+void BotDataMgr::PushBotChatPvpAssaultEvent(Creature const* bot, std::string_view attackerName)
+{
+    if (!bot || attackerName.empty() || bot->GetEntry() == 0)
+        return;
+    if (HasPendingSceneEvent(bot->GetEntry()))
+        return;
+    // Set PvP killer so worldCall distress triggers
+    RememberPvpKillerByEntry(bot->GetEntry(), attackerName);
+    // Push a PvP assault scene event so the bot can cry for help while still alive
+    PushSceneEventByEntry(bot->GetEntry(), Bcore::StringFormat(
+        "event=PVP_ASSAULT; attacker={}; map={}; x={:.1f}; y={:.1f}",
+        attackerName, bot->GetMapId(), bot->GetPositionX(), bot->GetPositionY()));
 }
 
 void BotDataMgr::UpdateWandererSocial(Creature* bot)
