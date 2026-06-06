@@ -389,7 +389,7 @@ void GameEventMgr::LoadFromDB()
                 Field* fields = result->Fetch();
 
                 ObjectGuid::LowType guid = fields[0].GetUInt32();
-                int16 event_id = fields[1].GetInt8();
+                int16 event_id = fields[1].GetInt16();
 
                 int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
@@ -439,7 +439,7 @@ void GameEventMgr::LoadFromDB()
                 Field* fields = result->Fetch();
 
                 ObjectGuid::LowType guid = fields[0].GetUInt32();
-                int16 event_id = fields[1].GetInt8();
+                int16 event_id = fields[1].GetInt16();
 
                 int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
@@ -912,7 +912,7 @@ void GameEventMgr::LoadFromDB()
                 Field* fields = result->Fetch();
 
                 uint32 entry   = fields[0].GetUInt32();
-                int16 event_id = fields[1].GetInt8();
+                int16 event_id = fields[1].GetInt16();
 
                 int32 internal_event_id = mGameEvent.size() + event_id - 1;
 
