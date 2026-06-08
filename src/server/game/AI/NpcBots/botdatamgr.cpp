@@ -705,6 +705,10 @@ static void TryWandererGreetPlayer(Creature* bot, Player* player)
     if (!bot || !player || player->IsGameMaster())
         return;
 
+    // By leewheel 20260609 - skip greeting for hostile faction players
+    if (bot->IsValidAttackTarget(player))
+        return;
+
     uint64 const key = (uint64(bot->GetEntry()) << 32) | player->GetGUID().GetCounter();
     uint32 const nowMs = GameTime::GetGameTimeMS();
     auto itr = _wandererGreetCooldownUntilMs.find(key);

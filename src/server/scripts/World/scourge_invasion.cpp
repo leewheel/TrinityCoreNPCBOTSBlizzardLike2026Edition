@@ -1297,11 +1297,11 @@ struct ScourgeInvasionWorldScript : public WorldScript
 
             // Auto-create World channel
             if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
-                channelMgr->CreateCustomChannel("世界");
+                channelMgr->CreateCustomChannel("世界频道");
             if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
-                channelMgr->CreateCustomChannel("世界");
+                channelMgr->CreateCustomChannel("世界频道");
 
-            // Auto-join all currently online players to "世界" channel
+            // Auto-join all currently online players to "世界频道" channel
             SessionMap const& sessions = sWorld->GetAllSessions();
             for (auto const& sessionPair : sessions)
             {
@@ -1309,7 +1309,7 @@ struct ScourgeInvasionWorldScript : public WorldScript
                 if (!player || !player->IsInWorld())
                     continue;
                 if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-                    mgr->GetChannel(0, "世界", player);
+                    mgr->GetChannel(0, "世界频道", player);
             }
 
             if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
@@ -1334,7 +1334,7 @@ public:
         if (!player)
             return;
         if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-            mgr->GetChannel(0, "世界", player);
+            mgr->GetChannel(0, "世界频道", player);
     }
 };
 
