@@ -22,12 +22,12 @@ UPDATE `smart_scripts` SET `event_flags` = 1 WHERE `entryorguid` = 16141 AND `id
 -- 3. Shadow of Doom SmartAI 替换（移除 Acore 特有指令）
 -- ===================================================
 DELETE FROM `smart_scripts` WHERE `entryorguid` = 16143;
-INSERT INTO `smart_scripts` (`entryorguid`, `source_type`, `id`, `link`, `event_type`, `event_phase_mask`, `event_chance`, `event_flags`, `event_param1`, `event_param2`, `action_type`, `action_param1`, `action_param2`, `target_type`, `comment`) VALUES
-(16143, 0, 0, 0, 54, 0, 100, 0, 0, 0, 11, 10389, 0, 1, 'Shadow of Doom - On Summon - Cast Spawn Smoke'),
+INSERT INTO `smart_scripts` (`entryorguid`, `source_type`, `id`, `link`, `event_type`, `event_phase_mask`, `event_chance`, `event_flags`, `event_param1`, `event_param2`, `event_param3`, `event_param4`, `action_type`, `action_param1`, `action_param2`, `target_type`, `comment`) VALUES
+(16143, 0, 0, 0, 54, 0, 100, 0, 0, 0, 0, 0, 11, 10389, 0, 1, 'Shadow of Doom - On Summon - Cast Spawn Smoke'),
 (16143, 0, 1, 0, 0, 0, 100, 0, 2000, 2000, 2000, 2000, 11, 16568, 0, 2, 'Shadow of Doom - In Combat - Cast Mind Flay'),
 (16143, 0, 2, 0, 0, 0, 100, 1, 3000, 3000, 3000, 3000, 11, 12542, 0, 2, 'Shadow of Doom - In Combat - Cast Fear'),
-(16143, 0, 3, 0, 6, 0, 100, 0, 0, 0, 11, 28056, 0, 1, 'Shadow of Doom - On Death - Cast Zap Crystal Corpse'),
-(16143, 0, 4, 0, 8, 0, 100, 0, 17680, 0, 41, 3000, 0, 1, 'Shadow of Doom - On Spellhit Spirit Spawn - Despawn');
+(16143, 0, 3, 0, 6, 0, 100, 0, 0, 0, 0, 0, 11, 28056, 0, 1, 'Shadow of Doom - On Death - Cast Zap Crystal Corpse'),
+(16143, 0, 4, 0, 8, 0, 100, 0, 17680, 0, 0, 0, 41, 3000, 0, 1, 'Shadow of Doom - On Spellhit Spirit Spawn - Despawn');
 
 -- ===================================================
 -- 4. 军需官难度2 npcflag 同步

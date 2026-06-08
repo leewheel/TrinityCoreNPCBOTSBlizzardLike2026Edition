@@ -20,6 +20,8 @@
 // This is where scripts' loading functions should be declared:
 // world
 void AddSC_scourge_invasion();
+void AddSC_npc_taxi();
+void AddSC_transport_zeppelins();
 void AddSC_areatrigger_scripts();
 void AddSC_emerald_dragons();
 void AddSC_go_scripts();
@@ -41,6 +43,8 @@ void AddSC_action_ip_logger();
 void AddWorldScripts()
 {
     AddSC_scourge_invasion();
+    AddSC_npc_taxi();
+    AddSC_transport_zeppelins();
     AddSC_areatrigger_scripts();
     AddSC_emerald_dragons();
     AddSC_go_scripts();

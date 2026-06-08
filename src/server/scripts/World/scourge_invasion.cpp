@@ -161,7 +161,10 @@ public:
             if (it != TimePoint())
             {
                 auto secs = std::chrono::duration_cast<std::chrono::seconds>(it - std::chrono::steady_clock::now()).count();
-                timerVal = std::max<uint32>(0, secs);
+                if (secs > 0)
+                    timerVal = static_cast<uint32>(secs);
+                else
+                    timerVal = 0;
             }
             WorldDatabase.Execute(fmt::format("INSERT INTO scourge_invasion_state (zoneId, attackTimer, remainingNecropoli, battlesWon, lastAttackZone, state) VALUES ({}, {}, {}, {}, {}, {})",
                 def.zoneId, timerVal, _data.remaining[def.remainingIdx], _data.battlesWon, _data.lastAttackZone, uint32(_data.state)).c_str());
@@ -174,7 +177,10 @@ public:
             if (it != TimePoint())
             {
                 auto secs = std::chrono::duration_cast<std::chrono::seconds>(it - std::chrono::steady_clock::now()).count();
-                timerVal = std::max<uint32>(0, secs);
+                if (secs > 0)
+                    timerVal = static_cast<uint32>(secs);
+                else
+                    timerVal = 0;
             }
             WorldDatabase.Execute(fmt::format("INSERT INTO scourge_invasion_state (zoneId, attackTimer, remainingNecropoli, battlesWon, lastAttackZone, state) VALUES ({}, {}, 0, {}, {}, {})",
                 def.zoneId, timerVal, _data.battlesWon, _data.lastAttackZone, uint32(_data.state)).c_str());
@@ -720,7 +726,12 @@ private:
 
 struct npc_necropolis_proxy : public ScriptedAI
 {
-    npc_necropolis_proxy(Creature* creature) : ScriptedAI(creature) { me->setActive(true); }
+    npc_necropolis_proxy(Creature* creature) : ScriptedAI(creature)
+    {
+        me->setActive(true);
+        me->SetDisplayId(11686); // invisible
+        me->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+    }
 
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
     {
@@ -750,7 +761,12 @@ struct npc_necropolis_proxy : public ScriptedAI
 
 struct npc_necropolis_relay : public ScriptedAI
 {
-    npc_necropolis_relay(Creature* creature) : ScriptedAI(creature) { me->setActive(true); }
+    npc_necropolis_relay(Creature* creature) : ScriptedAI(creature)
+    {
+        me->setActive(true);
+        me->SetDisplayId(11686); // invisible
+        me->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
+    }
 
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
     {
