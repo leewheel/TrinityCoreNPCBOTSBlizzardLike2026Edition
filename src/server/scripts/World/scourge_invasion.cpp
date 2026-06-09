@@ -80,7 +80,7 @@ struct InvasionZoneDef
 
 static InvasionZoneDef const g_invasionZoneDefs[] =
 {
-    { 0, AREA_WINTERSPRING,       3, SI_REMAINING_WINTERSPRING,       SI_TIMER_WINTERSPRING,       7736.56f,  -4033.75f, 696.327f },
+    { 1, AREA_WINTERSPRING,       3, SI_REMAINING_WINTERSPRING,       SI_TIMER_WINTERSPRING,       7736.56f,  -4033.75f, 696.327f },
     { 1, AREA_TANARIS,            3, SI_REMAINING_TANARIS,            SI_TIMER_TANARIS,           -8352.68f, -3972.68f,  10.0753f },
     { 1, AREA_AZSHARA,            2, SI_REMAINING_AZSHARA,            SI_TIMER_AZSHARA,            3273.75f,  -4276.98f, 125.509f },
     { 0, AREA_BLASTED_LANDS,      2, SI_REMAINING_BLASTED_LANDS,      SI_TIMER_BLASTED_LANDS,    -11429.3f,  -3327.82f,   7.73628f },
@@ -544,12 +544,12 @@ public:
         for (auto const& def : g_invasionZoneDefs)
         {
             if (_data.timers[def.timerIdx] == TimePoint())
-                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(300, 600));
+                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(60, 120));
         }
         for (auto const& def : g_pallidDefs)
         {
             if (_data.timers[def.timerIdx] == TimePoint())
-                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(600, 1200));
+                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(120, 240));
         }
 
         // Game event 17 must be started so that NPCs bound via game_event_creature spawn.
@@ -1299,11 +1299,11 @@ struct ScourgeInvasionWorldScript : public WorldScript
 
             // Auto-create World channel
             if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
-                channelMgr->CreateCustomChannel("世界频道");
+                channelMgr->CreateCustomChannel("世界");
             if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
-                channelMgr->CreateCustomChannel("世界频道");
+                channelMgr->CreateCustomChannel("世界");
 
-            // Auto-join all currently online players to "世界频道" channel
+            // Auto-join all currently online players to "世界" channel
             SessionMap const& sessions = sWorld->GetAllSessions();
             for (auto const& sessionPair : sessions)
             {
@@ -1311,7 +1311,7 @@ struct ScourgeInvasionWorldScript : public WorldScript
                 if (!player || !player->IsInWorld())
                     continue;
                 if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-                    mgr->GetChannel(0, "世界频道", player);
+                    mgr->GetChannel(0, "世界", player);
             }
 
             if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
@@ -1336,7 +1336,7 @@ public:
         if (!player)
             return;
         if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-            mgr->GetChannel(0, "世界频道", player);
+            mgr->GetChannel(0, "世界", player);
     }
 };
 

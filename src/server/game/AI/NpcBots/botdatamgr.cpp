@@ -552,6 +552,8 @@ static int32 GetBotChatCandidatePriority(Creature const* bot, uint32 nowMs)
         return 720;
     if (bot->IsWandererBot() && BotChatMapHasPlayers(bot))
         return 500;
+    if (bot->IsWandererBot())
+        return 300; // Bot on empty map - can still world-chat at lower priority
     return 0;
 }
 
@@ -1125,7 +1127,7 @@ static void TryBotChannelChat(uint32 diff)
         }
     }
 
-    bool const allowWorldAutonomous = BotCfg::IsBotChatWorldEnabled() && BotChatMapHasPlayers(bot) &&
+    bool const allowWorldAutonomous = BotCfg::IsBotChatWorldEnabled() &&
         (bot->IsWandererBot() || urgentReply || !partyChannel);
     if (!sent && allowWorldAutonomous && !partyChannel)
     {
