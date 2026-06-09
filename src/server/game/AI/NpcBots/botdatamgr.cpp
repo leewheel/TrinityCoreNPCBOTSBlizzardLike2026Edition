@@ -2,6 +2,9 @@
 #include "BattlegroundQueue.h"
 #include "bot_ai.h"
 #include "bot_chat_llm.h"
+#ifdef TRINITY_NPCBOT_LLM_EMBED
+#include "llama.h"
+#endif
 #include "botconfig.h"
 #include "botdatamgr.h"
 #include "botgearscore.h"
@@ -2591,37 +2594,79 @@ namespace
 
 void BotDataMgr::InitNpcBotLLM()
 {
-#ifndef TRINITY_NPCBOT_LLM_EMBED
-    if (BotCfg::IsBotChatLLMEnabled())
-        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: config enabled but worldserver was built WITHOUT embedded llama "
-            "(enable WITH_NPCBOT_LLM_EMBED and rebuild game/worldserver)");
-    return;
-#endif
-
-    if (!BotCfg::IsBotChatLLMEnabled())
+#ifdef TRINITY_NPCBOT_LLM_EMBED
+    // --- 1. 检查 CUDA 可用性 ---
+    bool const gpuAvailable = llama_supports_gpu_offload();
+    if (!gpuAvailable)
     {
-        TC_LOG_INFO("server.loading", ">> NpcBot LLM: disabled (NpcBot.Chat.LLM.Enable = 0)");
-        RefreshNpcBotLLMConfig();
+        TC_LOG_INFO("server.loading", ">> NpcBot LLM: disabled — no CUDA/GPU backend detected on this machine");
         return;
     }
 
-    std::string const modelRef = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
-    if (modelRef.empty())
+    // --- 2. 扫描模型目录下的 .gguf 文件 ---
+    std::filesystem::path modelDir = std::filesystem::path(".") / "ClientData" / "Ai.Mod";
+    std::vector<std::filesystem::path> ggufFiles;
+    std::error_code ec;
+    if (std::filesystem::exists(modelDir, ec))
     {
-        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: enabled but NpcBot.Chat.LLM.ModelName / ModelPath is empty");
-        RefreshNpcBotLLMConfig();
-        return;
+        for (auto const& entry : std::filesystem::directory_iterator(modelDir, ec))
+            if (entry.path().extension() == ".gguf")
+                ggufFiles.push_back(entry.path());
     }
 
-    TC_LOG_INFO("server.loading", ">> NpcBot LLM: loading '{}' (Device={}, cwd={})...",
-        modelRef, BotCfg::IsBotChatLLMUseGpu() ? "gpu" : "cpu", std::filesystem::current_path().string());
+    // --- 3. 根据 gguf 数量决定加载哪个 ---
+    std::string selectedModel;
+    if (ggufFiles.empty())
+    {
+        TC_LOG_INFO("server.loading", ">> NpcBot LLM: no .gguf model found under '{}'", modelDir.string());
+        return;
+    }
+    else if (ggufFiles.size() == 1)
+    {
+        // A: 只有一个，直接用
+        selectedModel = ggufFiles[0].string();
+        TC_LOG_INFO("server.loading", ">> NpcBot LLM: auto-detected single model '{}'", ggufFiles[0].filename().string());
+    }
+    else
+    {
+        // B: 有多个，匹配 NpcBot.Chat.LLM.ModelName
+        std::string const desired = BotCfg::GetBotChatLLMModelName();
+        if (desired.empty())
+        {
+            TC_LOG_ERROR("server.loading", ">> NpcBot LLM: multiple .gguf models found but NpcBot.Chat.LLM.ModelName is not set");
+            return;
+        }
+        bool found = false;
+        for (auto const& gf : ggufFiles)
+        {
+            if (gf.filename().string() == desired || gf.stem().string() == desired)
+            {
+                selectedModel = gf.string();
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            TC_LOG_ERROR("server.loading", ">> NpcBot LLM: model '{}' not found among available .gguf files", desired);
+            return;
+        }
+    }
 
-    RefreshNpcBotLLMConfig();
+    // --- 4. 加载选定模型 ---
+    TC_LOG_INFO("server.loading", ">> NpcBot LLM: loading '{}' (Device=gpu, cwd={})...",
+        std::filesystem::path(selectedModel).filename().string(), std::filesystem::current_path().string());
+
+    NpcBotChatLLM::Engine::Instance().Configure(true, selectedModel, true);
 
     if (NpcBotChatLLM::Engine::Instance().IsEnabled())
         TC_LOG_INFO("server.loading", ">> NpcBot LLM: ready (see npcbots log for GPU/VRAM details)");
     else
-        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: failed to load — check Server.log, model under .\\ClientData\\Ai.Mod\\, and GPU build");
+        TC_LOG_ERROR("server.loading", ">> NpcBot LLM: failed to load '{}' — check Server.log for details",
+            std::filesystem::path(selectedModel).filename().string());
+#else
+    TC_LOG_INFO("server.loading", ">> NpcBot LLM: disabled — worldserver built WITHOUT embedded llama");
+#endif
 }
 
 void BotDataMgr::Update(uint32 diff)
