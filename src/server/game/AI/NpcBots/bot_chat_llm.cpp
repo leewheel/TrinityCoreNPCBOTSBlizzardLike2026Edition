@@ -225,6 +225,10 @@ static void LlamaLogCallback(ggml_log_level level, char const* text, void* /*use
         if (line.empty() || line == ".")
             continue;
 
+        // By leewheel 20260609 - suppress noisy llama internal logs
+        if (line.find("unknown") != std::string::npos)
+            continue;
+
         {
             std::scoped_lock lk(g_llamaLogMutex);
             if (g_captureLlamaSummary)

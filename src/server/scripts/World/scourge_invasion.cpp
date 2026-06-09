@@ -535,9 +535,11 @@ public:
 
     void StartEvents()
     {
-        // Set initial timers if not already set (BEFORE game event start,
-        // because GameEventMgr::StartEvent triggers RunSmartAIScripts which
-        // may crash if maps aren't fully ready)
+        // Reset remaining to 0 so Update() will trigger new invasions
+        for (auto const& def : g_invasionZoneDefs)
+            _data.remaining[def.remainingIdx] = 0;
+
+        // Set initial timers if not already set
         TimePoint now = std::chrono::steady_clock::now();
         for (auto const& def : g_invasionZoneDefs)
         {

@@ -2660,7 +2660,13 @@ void BotDataMgr::InitNpcBotLLM()
     NpcBotChatLLM::Engine::Instance().Configure(true, selectedModel, true);
 
     if (NpcBotChatLLM::Engine::Instance().IsEnabled())
+    {
+        // Cache values to prevent RefreshNpcBotLLMConfig() from re-loading on first Update() tick
+        s_llmEnableCache = true;
+        s_llmUseGpuCache = true;
+        s_llmPathCache = selectedModel;
         TC_LOG_INFO("server.loading", ">> NpcBot LLM: ready (see npcbots log for GPU/VRAM details)");
+    }
     else
         TC_LOG_ERROR("server.loading", ">> NpcBot LLM: failed to load '{}' — check Server.log for details",
             std::filesystem::path(selectedModel).filename().string());
