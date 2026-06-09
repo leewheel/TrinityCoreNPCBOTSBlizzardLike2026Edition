@@ -2578,9 +2578,12 @@ namespace
     bool s_llmEnableCache = false;
     bool s_llmUseGpuCache = false;
     std::string s_llmPathCache;
+    bool s_llmAutoDetected = false; // prevents Refresh from overriding auto-detection
 
     void RefreshNpcBotLLMConfig()
     {
+        if (s_llmAutoDetected)
+            return; // Auto-detected config is authoritative — don't override
         bool const llmEnableNow = BotCfg::IsBotChatLLMEnabled();
         bool const llmUseGpuNow = BotCfg::IsBotChatLLMUseGpu();
         std::string llmPathNow = BotCfg::GetBotChatLLMModelName().empty() ? BotCfg::GetBotChatLLMModelPath() : BotCfg::GetBotChatLLMModelName();
@@ -2667,6 +2670,7 @@ void BotDataMgr::InitNpcBotLLM()
         s_llmEnableCache = true;
         s_llmUseGpuCache = true;
         s_llmPathCache = selectedModel;
+        s_llmAutoDetected = true;
         TC_LOG_INFO("server.loading", ">> NpcBot LLM: ready (see npcbots log for GPU/VRAM details)");
     }
     else
@@ -2680,8 +2684,6 @@ void BotDataMgr::InitNpcBotLLM()
 void BotDataMgr::Update(uint32 diff)
 {
     RefreshNpcBotLLMConfig();
-
-    UpdateWandererLogSampler(diff);
     UpdateWandererGridRecycle(diff);
     TryBotChannelChat(diff); // By leewheel 20260528 - world/party/raid chat ticker.
 

@@ -320,8 +320,8 @@ public:
         _data.remaining[def->remainingIdx] = def->necropolisCount;
         _data.lastAttackZone = zoneId;
 
-        // Summon Mouth
-        Map* map = sMapMgr->FindMap(def->map, 0);
+        // Summon Mouth - use CreateBaseMap so map exists even without players
+        Map* map = sMapMgr->CreateBaseMap(def->map);
         if (!map)
         {
             AddPendingInvasion(zoneId);
@@ -355,6 +355,23 @@ public:
         }
         if (gameEventId && !sGameEventMgr->IsActiveEvent(gameEventId))
             sGameEventMgr->StartEvent(gameEventId, true);
+
+        // Directly spawn ground troops near mouth to guarantee visible combat
+        uint32 groundEntries[] = { 16422, 16423, 16141, 16298, 16299 };
+        for (uint32 i = 0; i < 15; ++i)
+        {
+            float angle = float(i) * (2.0f * M_PI / 15.0f);
+            float dist = 30.0f + urand(0, 30);
+            float x = def->mouthX + std::cos(angle) * dist;
+            float y = def->mouthY + std::sin(angle) * dist;
+            uint32 entry = groundEntries[urand(0, 4)];
+            if (Creature* grunt = map->SummonCreature(entry, Position(x, y, def->mouthZ, 0.0f)))
+            {
+                // Make aggressive to anyone in zone
+                grunt->SetReactState(REACT_AGGRESSIVE);
+            }
+        }
+
 
         BroadcastWorldStates();
         SaveToDB();
@@ -1288,39 +1305,50 @@ struct ScourgeInvasionWorldScript : public WorldScript
 
     void OnUpdate(uint32 diff) override
     {
-        if (_eventsStarted)
-            return;
-
-        _timer += diff;
-        // Wait 30 seconds to ensure all maps and objects are fully initialized
-        if (_timer >= 30000)
+        if (!_eventsStarted)
         {
-            _eventsStarted = true;
-
-            // Auto-create World channel
-            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
-                channelMgr->CreateCustomChannel("世界");
-            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
-                channelMgr->CreateCustomChannel("世界");
-
-            // Auto-join all currently online players to "世界" channel
-            SessionMap const& sessions = sWorld->GetAllSessions();
-            for (auto const& sessionPair : sessions)
+            _timer += diff;
+            // Wait 30 seconds to ensure all maps and objects are fully initialized
+            if (_timer >= 30000)
             {
-                Player* player = sessionPair.second->GetPlayer();
-                if (!player || !player->IsInWorld())
-                    continue;
-                if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-                    mgr->GetChannel(0, "世界", player);
-            }
+                _eventsStarted = true;
 
-            if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
-                sScourgeInvasionMgr->StartEvents();
+                // Auto-create World channel
+                if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
+                    channelMgr->CreateCustomChannel("世界");
+                if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
+                    channelMgr->CreateCustomChannel("世界");
+
+                // Auto-join all currently online players to "世界" channel
+                SessionMap const& sessions = sWorld->GetAllSessions();
+                for (auto const& sessionPair : sessions)
+                {
+                    Player* player = sessionPair.second->GetPlayer();
+                    if (!player || !player->IsInWorld())
+                        continue;
+                    if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
+                        mgr->GetChannel(0, "世界", player);
+                }
+
+                if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
+                    sScourgeInvasionMgr->StartEvents();
+            }
+            return;
+        }
+
+        // After events started, drive the invasion manager ticker
+        // (no dependency on si_controller which may not spawn on empty maps)
+        _tickTimer += diff;
+        if (_tickTimer >= 10000)
+        {
+            _tickTimer = 0;
+            sScourgeInvasionMgr->Update();
         }
     }
 
 private:
     uint32 _timer;
+    uint32 _tickTimer = 0;
     bool _eventsStarted;
 };
 
@@ -1373,41 +1401,35 @@ public:
         handler->PSendSysMessage("已击败入侵: %u 次", sScourgeInvasionMgr->GetBattlesWon());
 
         handler->SendSysMessage("--- 区域入侵 ---");
-        static std::pair<uint32, std::string_view> const zoneNames[] =
-        {
-            { 618, "冬泉谷" },
-            { 440, "塔纳利斯" },
-            { 16,  "艾萨拉" },
-            { 4,   "诅咒之地" },
-            { 139, "东瘟疫之地" },
-            { 46,  "燃烧平原" },
-        };
-
         auto now = std::chrono::steady_clock::now();
-        for (auto const& [zoneId, name] : zoneNames)
+        for (auto const& def : g_invasionZoneDefs)
         {
-            uint32 remaining = sScourgeInvasionMgr->GetSIRemainingByZone(zoneId);
+            uint32 remaining = sScourgeInvasionMgr->GetSIRemaining(def.remainingIdx);
+            // Map zoneId to display name
+            std::string_view name;
+            switch (def.zoneId)
+            {
+                case 618: name = "冬泉谷"; break;
+                case 440: name = "塔纳利斯"; break;
+                case 16:  name = "艾萨拉"; break;
+                case 4:   name = "诅咒之地"; break;
+                case 139: name = "东瘟疫之地"; break;
+                case 46:  name = "燃烧平原"; break;
+                default:  name = "未知"; break;
+            }
             if (remaining > 0)
             {
                 handler->PSendSysMessage("%s: |cffff0000战斗中|r (剩余 %u 个浮空城)", std::string(name).c_str(), remaining);
             }
             else
             {
-                // Find timer
                 uint32 timerSecs = 0;
-                for (auto const& def : g_invasionZoneDefs)
+                auto tp = sScourgeInvasionMgr->GetSITimer(def.timerIdx);
+                if (tp != TimePoint())
                 {
-                    if (def.zoneId == zoneId)
-                    {
-                        auto tp = sScourgeInvasionMgr->GetSITimer(def.timerIdx);
-                        if (tp != TimePoint())
-                        {
-                            auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
-                            if (secs > 0)
-                                timerSecs = static_cast<uint32>(secs);
-                        }
-                        break;
-                    }
+                    auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - std::chrono::steady_clock::now()).count();
+                    if (secs > 0)
+                        timerSecs = static_cast<uint32>(secs);
                 }
                 handler->PSendSysMessage("%s: |cff00ff00待命中|r (下次 %s)", std::string(name).c_str(), FormatRemaining(timerSecs).c_str());
             }
