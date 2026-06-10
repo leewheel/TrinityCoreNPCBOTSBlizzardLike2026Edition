@@ -157,6 +157,7 @@ static void ActivateScourgeMinion(Creature* minion)
 
     minion->setActive(true);
     minion->SetWanderDistance(1.0f);
+    minion->SetCorpseDelay(60);
 }
 
 static bool IsScourgeInvasionMinionEntry(uint32 entry)
@@ -198,8 +199,58 @@ static bool IsScourgeCommuniqueTarget(WorldObject* obj, uint32 spellId)
         case SPELL_COMMUNIQUE_CAMP_TO_RELAY:       return entry == NPC_NECROPOLIS_RELAY;
         case SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH: return entry == NPC_NECROPOLIS_RELAY || entry == NPC_NECROPOLIS_PROXY || entry == NPC_NECROPOLIS_HEALTH;
         case SPELL_ZAP_NECROPOLIS:                 return entry == NPC_NECROPOLIS_HEALTH;
-        default:                                   return false;
+        case SPELL_ZAP_CRYSTAL:                      return entry == NPC_NECROTIC_SHARD;
+        case SPELL_ZAP_CRYSTAL_CORPSE:               return entry == NPC_NECROTIC_SHARD || entry == NPC_DAMAGED_NECROTIC_SHARD;
+        case SPELL_DAMAGE_CRYSTAL:                 return entry == NPC_NECROTIC_SHARD || entry == NPC_DAMAGED_NECROTIC_SHARD;
+        case SPELL_DAMAGE_VS_GUARDS:               return entry == 1756 || entry == NPC_ROYAL_DREADGUARD; // city attack event
+        default:                                     return false;
     }
+}
+
+static bool IsPlayerOrCompanion(WorldObject* obj)
+{
+    if (!obj)
+        return false;
+
+    if (obj->IsPlayer())
+        return true;
+
+    Unit const* unit = obj->ToUnit();
+    if (!unit)
+        return false;
+
+    if (unit->IsPet() || unit->IsCharmedOwnedByPlayerOrPlayer())
+        return true;
+
+    if (Creature const* creature = unit->ToCreature())
+        if (creature->IsNPCBotOrPet())
+            return true;
+
+    return false;
+}
+
+// Scourge Strike (28265) must never hit players, bots, guards, or other friendly/neutral NPCs.
+static bool IsProtectedFromScourgeStrike(WorldObject* obj)
+{
+    if (!obj || IsPlayerOrCompanion(obj))
+        return true;
+
+    Creature const* creature = obj->ToCreature();
+    if (!creature)
+        return true;
+
+    if (creature->IsGuard())
+        return true;
+
+    return !IsScourgeInvasionMinionEntry(creature->GetEntry());
+}
+
+static bool IsValidScourgeInvasionBoltTarget(WorldObject* obj, uint32 spellId)
+{
+    if (!obj || IsPlayerOrCompanion(obj))
+        return false;
+
+    return IsScourgeCommuniqueTarget(obj, spellId);
 }
 
 // ===== Scourge Invasion Manager =====
@@ -708,6 +759,15 @@ public:
         Map* map = sMapMgr->FindMap(def.map, 0);
 
         TimePoint nextAttack = now + std::chrono::seconds(urand(ZONE_ATTACK_TIMER_MIN, ZONE_ATTACK_TIMER_MAX));
+
+        // Remaining > 0 but the per-zone game event stopped (e.g. crash/restart desync).
+        if (remaining > 0 && !sGameEventMgr->IsActiveEvent(def.gameEventId))
+        {
+            if (!mouthGuid.IsEmpty() && map && map->GetCreature(mouthGuid))
+                sGameEventMgr->StartEvent(def.gameEventId, true);
+            else
+                ResumeInvasion(def);
+        }
 
         if (!mouthGuid.IsEmpty())
         {
@@ -1859,33 +1919,40 @@ class spell_scourge_invasion_communique_filter : public SpellScript
     void PreventInvalidHit(SpellEffIndex effIndex)
     {
         if (WorldObject* target = GetHitUnit() ? static_cast<WorldObject*>(GetHitUnit()) : GetHitGObj())
-            if (!IsScourgeCommuniqueTarget(target, GetSpellInfo()->Id))
+            if (!IsValidScourgeInvasionBoltTarget(target, GetSpellInfo()->Id))
                 PreventHitDefaultEffect(effIndex);
     }
 
     void Register() override
     {
-        // Safety net: communique bolts are area/chain visuals that must never damage bystanders.
+        // Communique bolts are area/chain visuals that must never damage players, pets, or bots.
         OnEffectHitTarget += SpellEffectFn(spell_scourge_invasion_communique_filter::PreventInvalidHit, EFFECT_ALL, SPELL_EFFECT_ANY);
     }
 };
 
-// 28265 - Scourge Strike
+// 28265 - Scourge Strike (pink lightning instakill; SmartAI casts on current victim)
 class spell_scourge_invasion_scourge_strike : public SpellScript
 {
     PrepareSpellScript(spell_scourge_invasion_scourge_strike);
 
     SpellCastResult CheckCast()
     {
-        Unit* target = GetExplTargetUnit();
-        if (!target || target->IsPlayer() || target->IsCharmedOwnedByPlayerOrPlayer())
+        if (IsProtectedFromScourgeStrike(GetExplTargetUnit()))
             return SPELL_FAILED_BAD_TARGETS;
         return SPELL_CAST_OK;
+    }
+
+    void PreventProtectedHit(SpellEffIndex effIndex)
+    {
+        if (IsProtectedFromScourgeStrike(GetHitUnit()))
+            PreventHitDefaultEffect(effIndex);
     }
 
     void Register() override
     {
         OnCheckCast += SpellCheckCastFn(spell_scourge_invasion_scourge_strike::CheckCast);
+        // Creature SmartAI instant casts may bypass CheckCast; block damage at hit time.
+        OnEffectHitTarget += SpellEffectFn(spell_scourge_invasion_scourge_strike::PreventProtectedHit, EFFECT_ALL, SPELL_EFFECT_ANY);
     }
 };
 
@@ -2001,7 +2068,12 @@ public:
         handler->PSendSysMessage("系统状态: %s", state == SI_STATE_ENABLED ? "|cff00ff00已启用|r" : "|cffff0000已禁用|r");
         handler->PSendSysMessage("已击败入侵: %u 次", sScourgeInvasionMgr->GetBattlesWon());
 
-        handler->SendSysMessage("--- 区域入侵 ---");
+        bool const globalEventActive = sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION);
+        handler->PSendSysMessage("全球事件#17(主城外围巡逻): %s",
+            globalEventActive ? "|cffffcc00活动中|r — 暴风城/幽暗城门外会刷天灾步兵" : "|cff888888未激活|r");
+
+        handler->SendSysMessage("--- 区域入侵 (浮空城+营地，看这里！) ---");
+        uint32 activeZoneCount = 0;
         for (InvasionZoneDef const& def : g_invasionZoneDefs)
         {
             std::string_view name;
@@ -2017,21 +2089,36 @@ public:
             }
 
             uint32 remaining = sScourgeInvasionMgr->GetSIRemaining(def.remainingIdx);
+            bool const heraldAlive = !sScourgeInvasionMgr->GetMouthGuid(def.zoneId).IsEmpty();
+            bool const zoneEventActive = sGameEventMgr->IsActiveEvent(def.gameEventId);
+
             if (remaining > 0)
-                handler->PSendSysMessage("%s: |cffff0000战斗中|r (剩余 %u 个浮空城)", std::string(name).c_str(), remaining);
+            {
+                ++activeZoneCount;
+                handler->PSendSysMessage("%s: |cffff0000战斗中|r — 剩余浮空城 %u, 先驱%s, 区域事件#%u %s",
+                    std::string(name).c_str(), remaining,
+                    heraldAlive ? "存活" : "缺失(将自动恢复)",
+                    def.gameEventId, zoneEventActive ? "运行中" : "|cffff6600已停止(将自动恢复)|r");
+
+                if (def.zoneId == AREA_BURNING_STEPPES)
+                    handler->SendSysMessage("  |cffaaaaaa提示: 燃烧平原浮空城在东部王国中部上空，暴风城外也能看到|r");
+            }
             else
                 handler->PSendSysMessage("%s: |cff00ff00待命中|r (下次 %s)", std::string(name).c_str(),
                     FormatRemaining(SecondsUntil(sScourgeInvasionMgr->GetSITimer(def.timerIdx))).c_str());
         }
 
-        handler->SendSysMessage("--- 主城袭击 ---");
+        if (activeZoneCount == 0 && globalEventActive)
+            handler->SendSysMessage("|cffffcc00注意: 无区域浮空城战斗，但事件#17仍会在主城门外刷巡逻步兵|r");
+
+        handler->SendSysMessage("--- 主城袭击 (城内苍白恐魔，与城外浮空城无关) ---");
         for (CityAttackDef const& def : g_cityAttackDefs)
         {
             std::string_view name = def.zoneId == AREA_UNDERCITY ? "幽暗城" : "暴风城";
             if (!sScourgeInvasionMgr->GetPallidGuid(def.zoneId).IsEmpty())
-                handler->PSendSysMessage("%s: |cffff0000遭到袭击中|r", std::string(name).c_str());
+                handler->PSendSysMessage("%s城内袭击: |cffff0000苍白恐魔行进中|r", std::string(name).c_str());
             else
-                handler->PSendSysMessage("%s: |cff00ff00安全|r (下次 %s)", std::string(name).c_str(),
+                handler->PSendSysMessage("%s城内袭击: |cff00ff00无苍白恐魔|r (下次 %s)", std::string(name).c_str(),
                     FormatRemaining(SecondsUntil(sScourgeInvasionMgr->GetSITimer(def.timerIdx))).c_str());
         }
 
