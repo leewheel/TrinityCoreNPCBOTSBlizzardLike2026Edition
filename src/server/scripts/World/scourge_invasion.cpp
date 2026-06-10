@@ -20,16 +20,17 @@
 #include "CellImpl.h"
 #include "ChannelMgr.h"
 #include "Chat.h"
+#include "ChatCommand.h"
 #include "Containers.h"
 #include "Creature.h"
 #include "CreatureAI.h"
-#include "CreatureTextMgr.h"
 #include "DatabaseEnv.h"
 #include "GameEventMgr.h"
 #include "GameObject.h"
 #include "GameObjectAI.h"
+#include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
-#include "Group.h"
+#include "Log.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "MotionMaster.h"
@@ -40,34 +41,40 @@
 #include "ScriptedGossip.h"
 #include "SpellInfo.h"
 #include "SpellScript.h"
+#include "TemporarySummon.h"
 #include "Weather.h"
 #include "WeatherMgr.h"
 #include "World.h"
 #include "WorldSession.h"
-#include "Log.h"
+
+#include <chrono>
+#include <map>
+#include <mutex>
 
 using namespace Trinity::ChatCommands;
 
-#include <mutex>
-#include <set>
-#include <map>
-
 using TimePoint = std::chrono::steady_clock::time_point;
 
-// ===== Scourge Invasion Manager =====
+/*
+ * Scourge Invasion - design notes (mirrors the AzerothCore reference implementation):
+ *
+ *  - The manager only ever summons two creatures directly: the Herald of the Lich King
+ *    ("Mouth of Kel'Thuzad") per invaded zone and the Pallid Horror for city attacks.
+ *  - Everything else (Necropolis anchors/health/proxy/relay, minion finders, summoning
+ *    circles, necropolis gameobjects, doodads) is spawned by the game event system
+ *    (events 121-126) from game_event_creature / game_event_gameobject.
+ *  - The purple communication chain runs through serverside/dbc spells with
+ *    `conditions` rows restricting their implicit targets:
+ *        Necropolis(16401) -28395 aura-> 28373 -> Proxy(16398) -> 28366 -> Relay(16386)
+ *        -> 28326 -> Camp crystal (16136/16172)
+ *    The death chain runs backwards (28351) and ends with the Necropolis Health
+ *    NPC (16421) zapping itself to death, decrementing the zone counter.
+ *  - Necrotic Shards (16136) are created by the Summoning Circle GO (181136, SmartAI
+ *    casts 28344 on init). Minions are spawned through Minion Finder NPCs (16356)
+ *    and Minion Spawner NPCs (16306/16336/16338), never directly by this script.
+ */
 
-struct ScourgeInvasionData
-{
-    SIState state = SI_STATE_DISABLED;
-    TimePoint timers[SI_TIMER_MAX];
-    uint32 battlesWon = 0;
-    uint32 lastAttackZone = 0;
-    uint32 remaining[SI_REMAINING_MAX] = {};
-    std::set<uint32> pendingInvasions;
-    std::set<uint32> pendingPallids;
-    std::map<uint32, ObjectGuid> mouthGuids;
-    std::map<uint32, ObjectGuid> pallidGuids;
-};
+// ===== Static zone/city definitions =====
 
 struct InvasionZoneDef
 {
@@ -76,65 +83,99 @@ struct InvasionZoneDef
     uint32 necropolisCount;
     SIRemaining remainingIdx;
     SITimers timerIdx;
-    float mouthX, mouthY, mouthZ;
+    uint32 gameEventId;
+    Position mouth;
 };
 
 static InvasionZoneDef const g_invasionZoneDefs[] =
 {
-    { 1, AREA_WINTERSPRING,       3, SI_REMAINING_WINTERSPRING,       SI_TIMER_WINTERSPRING,       7736.56f,  -4033.75f, 696.327f },
-    { 1, AREA_TANARIS,            3, SI_REMAINING_TANARIS,            SI_TIMER_TANARIS,           -8352.68f, -3972.68f,  10.0753f },
-    { 1, AREA_AZSHARA,            2, SI_REMAINING_AZSHARA,            SI_TIMER_AZSHARA,            3273.75f,  -4276.98f, 125.509f },
-    { 0, AREA_BLASTED_LANDS,      2, SI_REMAINING_BLASTED_LANDS,      SI_TIMER_BLASTED_LANDS,    -11429.3f,  -3327.82f,   7.73628f },
-    { 0, AREA_EASTERN_PLAGUELANDS, 2, SI_REMAINING_EASTERN_PLAGUELANDS, SI_TIMER_EASTERN_PLAGUELANDS, 2014.55f, -4934.52f, 73.9846f },
-    { 0, AREA_BURNING_STEPPES,    2, SI_REMAINING_BURNING_STEPPES,    SI_TIMER_BURNING_STEPPES,    -8229.53f, -1118.11f, 144.012f },
+    { 1, AREA_WINTERSPRING,        3, SI_REMAINING_WINTERSPRING,        SI_TIMER_WINTERSPRING,        GAME_EVENT_SCOURGE_INVASION_WINTERSPRING,        { 7736.56f,  -4033.75f, 696.327f,  5.51524f  } },
+    { 1, AREA_TANARIS,             3, SI_REMAINING_TANARIS,             SI_TIMER_TANARIS,             GAME_EVENT_SCOURGE_INVASION_TANARIS,             { -8352.68f, -3972.68f, 10.0753f,  2.14675f  } },
+    { 1, AREA_AZSHARA,             2, SI_REMAINING_AZSHARA,             SI_TIMER_AZSHARA,             GAME_EVENT_SCOURGE_INVASION_AZSHARA,             { 3273.75f,  -4276.98f, 125.509f,  5.44543f  } },
+    { 0, AREA_BLASTED_LANDS,       2, SI_REMAINING_BLASTED_LANDS,       SI_TIMER_BLASTED_LANDS,       GAME_EVENT_SCOURGE_INVASION_BLASTED_LANDS,       { -11429.3f, -3327.82f, 7.73628f,  1.0821f   } },
+    { 0, AREA_EASTERN_PLAGUELANDS, 2, SI_REMAINING_EASTERN_PLAGUELANDS, SI_TIMER_EASTERN_PLAGUELANDS, GAME_EVENT_SCOURGE_INVASION_EASTERN_PLAGUELANDS, { 2014.55f,  -4934.52f, 73.9846f,  0.0698132f} },
+    { 0, AREA_BURNING_STEPPES,     2, SI_REMAINING_BURNING_STEPPES,     SI_TIMER_BURNING_STEPPES,     GAME_EVENT_SCOURGE_INVASION_BURNING_STEPPES,     { -8229.53f, -1118.11f, 144.012f,  6.17846f  } },
 };
 
-// Necropolis GO positions per zone (from game_event_gameobject)
-struct NecropolisGOPos { float x, y, z; uint32 goEntry; };
-static NecropolisGOPos const g_necropolisGOs[][3] = {
-    /* AREA_WINTERSPRING */   { {6646.69f, -3442.36f, 792.92f, 181223}, {7755.75f, -4030.91f, 786.50f, 181223}, {6184.28f, -4913.32f, 807.68f, 181373} },
-    /* AREA_TANARIS */        { {-7399.95f, -3733.06f, 61.05f, 181215}, {-8633.21f, -2499.82f, 114.02f, 181215}, {-8333.68f, -3966.4f, 77.85f, 181215} },
-    /* AREA_AZSHARA */        { {3544.98f, -5610.26f, 67.11f, 181154}, {3299.55f, -4301.3f, 177.81f, 181154}, {0,0,0,0} },
-    /* AREA_BLASTED_LANDS */  { {-11402.1f, -3316.55f, 111.19f, 181223}, {-11233.9f, -2841.77f, 185.60f, 181374}, {0,0,0,0} },
-    /* AREA_EASTERN_PLAGUELANDS */ { {1766.67f, -3033.34f, 132.80f, 181154}, {2101.69f, -4930.03f, 168.28f, 181154}, {0,0,0,0} },
-    /* AREA_BURNING_STEPPES */ { {-8232.78f, -1099.86f, 201.49f, 181154}, {-7733.71f, -2432.74f, 190.79f, 181154}, {0,0,0,0} },
-};
-
-// Map zoneId → index in g_necropolisGOs
-static int GetNecropolisGOIndex(uint32 zoneId)
-{
-    switch (zoneId) {
-        case AREA_WINTERSPRING: return 0;
-        case AREA_TANARIS: return 1;
-        case AREA_AZSHARA: return 2;
-        case AREA_BLASTED_LANDS: return 3;
-        case AREA_EASTERN_PLAGUELANDS: return 4;
-        case AREA_BURNING_STEPPES: return 5;
-        default: return -1;
-    }
-}
-
-struct PallidAttackDef
+struct CityAttackDef
 {
     uint32 map;
     uint32 zoneId;
     SITimers timerIdx;
-    float pallidX[2], pallidY[2], pallidZ[2];
+    Position pallid[2];
+    uint32 path[2];
 };
 
-static PallidAttackDef const g_pallidDefs[] =
+static CityAttackDef const g_cityAttackDefs[] =
 {
-    { 0, AREA_UNDERCITY, SI_TIMER_UNDERCITY, { 1914.89f, 1834.36f }, { 240.815f, 217.958f }, { 54.3627f, 58.1834f } },
-    { 0, AREA_STORMWIND, SI_TIMER_STORMWIND, { -8810.69f, -8449.83f }, { 624.104f, 340.891f }, { 101.348f, 113.409f } },
+    { 0, AREA_UNDERCITY, SI_TIMER_UNDERCITY,
+        { { 1595.87f,  440.539f, -46.3349f, 2.28207f  },   // Royal Quarter
+          { 1659.2f,   265.988f, -62.1788f, 3.64283f  } }, // Trade Quarter
+        { PATH_UNDERCITY_ROYAL_QUARTER, PATH_UNDERCITY_TRADE_QUARTER } },
+    { 0, AREA_STORMWIND, SI_TIMER_STORMWIND,
+        { { -8578.15f, 886.382f, 87.3148f,  0.586275f },   // Stormwind Keep
+          { -8578.15f, 886.382f, 87.3148f,  0.586275f } }, // Trade District (same spawn, other path)
+        { PATH_STORMWIND_KEEP, PATH_STORMWIND_TRADE_DISTRICT } },
 };
 
 static InvasionZoneDef const* FindInvasionZoneByZoneId(uint32 zoneId)
 {
-    for (auto const& def : g_invasionZoneDefs)
+    for (InvasionZoneDef const& def : g_invasionZoneDefs)
         if (def.zoneId == zoneId)
             return &def;
     return nullptr;
 }
+
+static CityAttackDef const* FindCityAttackByZoneId(uint32 zoneId)
+{
+    for (CityAttackDef const& def : g_cityAttackDefs)
+        if (def.zoneId == zoneId)
+            return &def;
+    return nullptr;
+}
+
+// Communique chain helpers — explicit targets prevent area-lightning from hitting bystanders.
+static bool IsNecropolisGameObjectEntry(uint32 entry)
+{
+    return entry == GO_NECROPOLIS_TINY || entry == GO_NECROPOLIS_SMALL || entry == GO_NECROPOLIS_MEDIUM
+        || entry == GO_NECROPOLIS_BIG || entry == GO_NECROPOLIS_HUGE;
+}
+
+static Creature* GetClosestNecroticShard(WorldObject* source, float range)
+{
+    if (Creature* shard = GetClosestCreatureWithEntry(source, NPC_NECROTIC_SHARD, range))
+        return shard;
+    return GetClosestCreatureWithEntry(source, NPC_DAMAGED_NECROTIC_SHARD, range);
+}
+
+static bool IsScourgeCommuniqueTarget(WorldObject* obj, uint32 spellId)
+{
+    if (!obj)
+        return false;
+
+    if (GameObject* go = obj->ToGameObject())
+        return spellId == SPELL_COMMUNIQUE_NECROPOLIS_TO_PROXIES && IsNecropolisGameObjectEntry(go->GetEntry());
+
+    Creature* creature = obj->ToCreature();
+    if (!creature)
+        return false;
+
+    uint32 entry = creature->GetEntry();
+    switch (spellId)
+    {
+        case SPELL_COMMUNIQUE_NECROPOLIS_TO_PROXIES: return entry == NPC_NECROPOLIS_PROXY;
+        case SPELL_COMMUNIQUE_PROXY_TO_RELAY:      return entry == NPC_NECROPOLIS_RELAY;
+        case SPELL_COMMUNIQUE_RELAY_TO_CAMP:       return entry == NPC_NECROTIC_SHARD || entry == NPC_DAMAGED_NECROTIC_SHARD;
+        case SPELL_COMMUNIQUE_RELAY_TO_PROXY:      return entry == NPC_NECROPOLIS_PROXY;
+        case SPELL_COMMUNIQUE_PROXY_TO_NECROPOLIS: return entry == NPC_NECROPOLIS;
+        case SPELL_COMMUNIQUE_CAMP_TO_RELAY:       return entry == NPC_NECROPOLIS_RELAY;
+        case SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH: return entry == NPC_NECROPOLIS_RELAY || entry == NPC_NECROPOLIS_PROXY || entry == NPC_NECROPOLIS_HEALTH;
+        case SPELL_ZAP_NECROPOLIS:                 return entry == NPC_NECROPOLIS_HEALTH;
+        default:                                   return false;
+    }
+}
+
+// ===== Scourge Invasion Manager =====
 
 class ScourgeInvasionMgr
 {
@@ -145,182 +186,388 @@ public:
         return &instance;
     }
 
+    // ---- persistence ----
+
     void LoadFromDB()
     {
         QueryResult result = WorldDatabase.Query("SELECT zoneId, attackTimer, remainingNecropoli, battlesWon, lastAttackZone, state FROM scourge_invasion_state");
         if (!result)
             return;
 
+        std::lock_guard<std::mutex> guard(_mutex);
+        TimePoint now = std::chrono::steady_clock::now();
         do
         {
             Field* fields = result->Fetch();
             uint32 zoneId = fields[0].GetUInt32();
             uint32 attackTimer = fields[1].GetUInt32();
             uint32 remaining = fields[2].GetUInt32();
-            _data.battlesWon = fields[3].GetUInt32();
-            _data.lastAttackZone = fields[4].GetUInt32();
-            _data.state = SIState(fields[5].GetUInt32());
+            _battlesWon = fields[3].GetUInt32();
+            _lastAttackZone = fields[4].GetUInt32();
+            _state = SIState(fields[5].GetUInt32());
 
             if (InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId))
             {
-                _data.remaining[def->remainingIdx] = remaining;
+                _remaining[def->remainingIdx] = remaining;
                 if (attackTimer)
-                    _data.timers[def->timerIdx] = std::chrono::steady_clock::now() + std::chrono::seconds(attackTimer);
+                    _timers[def->timerIdx] = now + std::chrono::seconds(attackTimer);
             }
-            else if (zoneId == AREA_UNDERCITY || zoneId == AREA_STORMWIND)
+            else if (CityAttackDef const* city = FindCityAttackByZoneId(zoneId))
             {
-                if (zoneId == AREA_UNDERCITY && attackTimer)
-                    _data.timers[SI_TIMER_UNDERCITY] = std::chrono::steady_clock::now() + std::chrono::seconds(attackTimer);
-                if (zoneId == AREA_STORMWIND && attackTimer)
-                    _data.timers[SI_TIMER_STORMWIND] = std::chrono::steady_clock::now() + std::chrono::seconds(attackTimer);
+                if (attackTimer)
+                    _timers[city->timerIdx] = now + std::chrono::seconds(attackTimer);
             }
         } while (result->NextRow());
     }
 
     void SaveToDB()
     {
+        uint32 battlesWon, lastAttackZone, state;
+        uint32 remaining[SI_REMAINING_MAX];
+        uint32 timerSecs[SI_TIMER_MAX];
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            battlesWon = _battlesWon;
+            lastAttackZone = _lastAttackZone;
+            state = uint32(_state);
+            std::copy(std::begin(_remaining), std::end(_remaining), remaining);
+
+            TimePoint now = std::chrono::steady_clock::now();
+            for (uint32 i = 0; i < SI_TIMER_MAX; ++i)
+            {
+                timerSecs[i] = 0;
+                if (_timers[i] != TimePoint())
+                {
+                    int64 secs = std::chrono::duration_cast<std::chrono::seconds>(_timers[i] - now).count();
+                    if (secs > 0)
+                        timerSecs[i] = uint32(secs);
+                }
+            }
+        }
+
         WorldDatabase.Execute("DELETE FROM scourge_invasion_state");
-        for (auto const& def : g_invasionZoneDefs)
-        {
-            uint32 timerVal = 0;
-            auto it = _data.timers[def.timerIdx];
-            if (it != TimePoint())
-            {
-                auto secs = std::chrono::duration_cast<std::chrono::seconds>(it - std::chrono::steady_clock::now()).count();
-                if (secs > 0)
-                    timerVal = static_cast<uint32>(secs);
-                else
-                    timerVal = 0;
-            }
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
             WorldDatabase.Execute(fmt::format("INSERT INTO scourge_invasion_state (zoneId, attackTimer, remainingNecropoli, battlesWon, lastAttackZone, state) VALUES ({}, {}, {}, {}, {}, {})",
-                def.zoneId, timerVal, _data.remaining[def.remainingIdx], _data.battlesWon, _data.lastAttackZone, uint32(_data.state)).c_str());
-        }
-        // Save city timers
-        for (auto const& def : g_pallidDefs)
-        {
-            uint32 timerVal = 0;
-            auto it = _data.timers[def.timerIdx];
-            if (it != TimePoint())
-            {
-                auto secs = std::chrono::duration_cast<std::chrono::seconds>(it - std::chrono::steady_clock::now()).count();
-                if (secs > 0)
-                    timerVal = static_cast<uint32>(secs);
-                else
-                    timerVal = 0;
-            }
+                def.zoneId, timerSecs[def.timerIdx], remaining[def.remainingIdx], battlesWon, lastAttackZone, state).c_str());
+        for (CityAttackDef const& def : g_cityAttackDefs)
             WorldDatabase.Execute(fmt::format("INSERT INTO scourge_invasion_state (zoneId, attackTimer, remainingNecropoli, battlesWon, lastAttackZone, state) VALUES ({}, {}, 0, {}, {}, {})",
-                def.zoneId, timerVal, _data.battlesWon, _data.lastAttackZone, uint32(_data.state)).c_str());
+                def.zoneId, timerSecs[def.timerIdx], battlesWon, lastAttackZone, state).c_str());
+    }
+
+    // ---- state accessors (thread-safe, may be called from map update threads) ----
+
+    SIState GetState() const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        return _state;
+    }
+
+    uint32 GetSIRemaining(SIRemaining idx) const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        return _remaining[idx];
+    }
+
+    void SetSIRemaining(SIRemaining idx, uint32 value)
+    {
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            _remaining[idx] = value;
         }
-    }
-
-    void SetState(SIState state)
-    {
-        _data.state = state;
-        if (state == SI_STATE_ENABLED)
-            StartEvents();
-        else
-            StopEvents();
-        SaveToDB();
-    }
-
-    SIState GetState() const { return _data.state; }
-
-    uint32 GetSIRemaining(SIRemaining idx) const { return _data.remaining[idx]; }
-    void SetSIRemaining(SIRemaining idx, uint32 val)
-    {
-        _data.remaining[idx] = val;
         SaveToDB();
     }
 
     uint32 GetSIRemainingByZone(uint32 zoneId) const
     {
-        for (uint32 i = 0; i < SI_REMAINING_MAX; ++i)
-            if (g_invasionZoneDefs[i].zoneId == zoneId)
-                return _data.remaining[i];
-        return 0;
+        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
+        return def ? GetSIRemaining(def->remainingIdx) : 0;
     }
 
-    TimePoint GetSITimer(SITimers idx) const { return _data.timers[idx]; }
-    void SetSITimer(SITimers idx, TimePoint tp) { _data.timers[idx] = tp; }
+    TimePoint GetSITimer(SITimers idx) const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        return _timers[idx];
+    }
 
-    uint32 GetBattlesWon() const { return _data.battlesWon; }
+    void SetSITimer(SITimers idx, TimePoint tp)
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _timers[idx] = tp;
+    }
+
+    uint32 GetBattlesWon() const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        return _battlesWon;
+    }
+
+    uint32 GetLastAttackZone() const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        return _lastAttackZone;
+    }
+
+    void SetLastAttackZone(uint32 zoneId)
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _lastAttackZone = zoneId;
+    }
+
+    ObjectGuid GetMouthGuid(uint32 zoneId) const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        auto itr = _mouthGuids.find(zoneId);
+        return itr != _mouthGuids.end() ? itr->second : ObjectGuid::Empty;
+    }
+
+    void SetMouthGuid(uint32 zoneId, ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _mouthGuids[zoneId] = guid;
+    }
+
+    ObjectGuid GetPallidGuid(uint32 zoneId) const
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        auto itr = _pallidGuids.find(zoneId);
+        return itr != _pallidGuids.end() ? itr->second : ObjectGuid::Empty;
+    }
+
+    void SetPallidGuid(uint32 zoneId, ObjectGuid guid)
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _pallidGuids[zoneId] = guid;
+    }
+
+    // Called from the world thread only (HandleActiveZone).
     void AddBattlesWon(int32 count)
     {
-        _data.battlesWon += count;
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            _battlesWon += count;
+        }
         HandleDefendedZones();
         SaveToDB();
     }
 
-    uint32 GetLastAttackZone() const { return _data.lastAttackZone; }
-    void SetLastAttackZone(uint32 z) { _data.lastAttackZone = z; }
+    // ---- main control (world thread only) ----
 
-    void SetMouthGuid(uint32 zoneId, ObjectGuid guid) { _data.mouthGuids[zoneId] = guid; }
-    void SetPallidGuid(uint32 zoneId, ObjectGuid guid) { _data.pallidGuids[zoneId] = guid; }
-    ObjectGuid GetMouthGuid(uint32 zoneId) const
+    void SetState(SIState state)
     {
-        auto it = _data.mouthGuids.find(zoneId);
-        return it != _data.mouthGuids.end() ? it->second : ObjectGuid::Empty;
-    }
-    ObjectGuid GetPallidGuid(uint32 zoneId) const
-    {
-        auto it = _data.pallidGuids.find(zoneId);
-        return it != _data.pallidGuids.end() ? it->second : ObjectGuid::Empty;
+        SIState oldState;
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            oldState = _state;
+            if (oldState == state)
+                return;
+            _state = state;
+        }
+
+        if (oldState == SI_STATE_DISABLED)
+            StartScourgeInvasion();
+        else if (state == SI_STATE_DISABLED)
+            StopScourgeInvasion();
+        SaveToDB();
     }
 
-    bool HasPendingInvasion(uint32 zoneId) const { return _data.pendingInvasions.count(zoneId) > 0; }
-    bool HasPendingPallid(uint32 zoneId) const { return _data.pendingPallids.count(zoneId) > 0; }
-    void AddPendingInvasion(uint32 z) { _data.pendingInvasions.insert(z); }
-    void RemovePendingInvasion(uint32 z) { _data.pendingInvasions.erase(z); }
-    void AddPendingPallid(uint32 z) { _data.pendingPallids.insert(z); }
-    void RemovePendingPallid(uint32 z) { _data.pendingPallids.erase(z); }
+    void StartScourgeInvasion()
+    {
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Starting Scourge Invasion.");
+
+        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
+            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
+
+        BroadcastWorldStates();
+
+        for (CityAttackDef const& def : g_cityAttackDefs)
+            StartNewCityAttackIfTime(def.zoneId);
+
+        // Randomize zone init order so every invasion cycle starts differently
+        std::vector<uint32> zoneIds;
+        zoneIds.reserve(std::size(g_invasionZoneDefs));
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
+            zoneIds.push_back(def.zoneId);
+        Trinity::Containers::RandomShuffle(zoneIds);
+
+        for (uint32 zoneId : zoneIds)
+        {
+            InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
+            if (GetSIRemaining(def->remainingIdx) > 0)
+                ResumeInvasion(*def);
+            else
+                StartNewInvasionIfTime(zoneId);
+        }
+
+        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
+            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES, true);
+
+        HandleDefendedZones();
+    }
+
+    void StopScourgeInvasion()
+    {
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Stopping Scourge Invasion.");
+
+        uint16 const events[] =
+        {
+            GAME_EVENT_SCOURGE_INVASION,
+            GAME_EVENT_SCOURGE_INVASION_WINTERSPRING, GAME_EVENT_SCOURGE_INVASION_TANARIS,
+            GAME_EVENT_SCOURGE_INVASION_AZSHARA, GAME_EVENT_SCOURGE_INVASION_BLASTED_LANDS,
+            GAME_EVENT_SCOURGE_INVASION_EASTERN_PLAGUELANDS, GAME_EVENT_SCOURGE_INVASION_BURNING_STEPPES,
+            GAME_EVENT_SCOURGE_INVASION_INVASIONS_DONE, GAME_EVENT_SCOURGE_INVASION_BOSSES
+        };
+        for (uint16 eventId : events)
+            if (sGameEventMgr->IsActiveEvent(eventId))
+                sGameEventMgr->StopEvent(eventId, true);
+
+        // Despawn mouths and pallids
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
+        {
+            if (Map* map = sMapMgr->FindMap(def.map, 0))
+                if (Creature* mouth = map->GetCreature(GetMouthGuid(def.zoneId)))
+                    mouth->DespawnOrUnsummon();
+            SetMouthGuid(def.zoneId, ObjectGuid::Empty);
+        }
+        for (CityAttackDef const& def : g_cityAttackDefs)
+        {
+            if (Map* map = sMapMgr->FindMap(def.map, 0))
+                if (Creature* pallid = map->GetCreature(GetPallidGuid(def.zoneId)))
+                    pallid->DespawnOrUnsummon();
+            SetPallidGuid(def.zoneId, ObjectGuid::Empty);
+        }
+
+        {
+            std::lock_guard<std::mutex> guard(_mutex);
+            for (TimePoint& timer : _timers)
+                timer = TimePoint();
+            memset(_remaining, 0, sizeof(_remaining));
+        }
+
+        BroadcastWorldStates();
+    }
+
+    // Driven by the WorldScript, world thread, real diff. Internal 10s tick.
+    void Update(uint32 diff)
+    {
+        if (GetState() != SI_STATE_ENABLED)
+            return;
+
+        if (_broadcastTimer > diff)
+        {
+            _broadcastTimer -= diff;
+            return;
+        }
+        _broadcastTimer = 10000;
+
+        BroadcastWorldStates();
+
+        for (CityAttackDef const& def : g_cityAttackDefs)
+            StartNewCityAttackIfTime(def.zoneId);
+
+        TimePoint now = std::chrono::steady_clock::now();
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
+            HandleActiveZone(def, now);
+    }
 
     void BroadcastWorldStates()
     {
-        WorldPacket data(SMSG_UPDATE_WORLD_STATE, 4 + 4);
-        auto sendWS = [&](uint32 variable, uint32 value)
+        uint32 victories = GetBattlesWon();
+        uint32 remainingAzshara = GetSIRemaining(SI_REMAINING_AZSHARA);
+        uint32 remainingBlastedLands = GetSIRemaining(SI_REMAINING_BLASTED_LANDS);
+        uint32 remainingBurningSteppes = GetSIRemaining(SI_REMAINING_BURNING_STEPPES);
+        uint32 remainingEasternPlaguelands = GetSIRemaining(SI_REMAINING_EASTERN_PLAGUELANDS);
+        uint32 remainingTanaris = GetSIRemaining(SI_REMAINING_TANARIS);
+        uint32 remainingWinterspring = GetSIRemaining(SI_REMAINING_WINTERSPRING);
+
+        auto sendToMap = [&](Map* map)
         {
-            data << uint32(variable);
-            data << uint32(value);
+            Map::PlayerList const& players = map->GetPlayers();
+            for (auto itr = players.begin(); itr != players.end(); ++itr)
+            {
+                Player* player = itr->GetSource();
+                if (!player || !player->IsInWorld())
+                    continue;
+
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_AZSHARA, remainingAzshara > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_BLASTED_LANDS, remainingBlastedLands > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_BURNING_STEPPES, remainingBurningSteppes > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_EASTERN_PLAGUELANDS, remainingEasternPlaguelands > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_TANARIS, remainingTanaris > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_WINTERSPRING, remainingWinterspring > 0 ? 1 : 0);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_VICTORIES, victories);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_AZSHARA, remainingAzshara);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_BLASTED_LANDS, remainingBlastedLands);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_BURNING_STEPPES, remainingBurningSteppes);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_EASTERN_PLAGUELANDS, remainingEasternPlaguelands);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_TANARIS, remainingTanaris);
+                player->SendUpdateWorldState(WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_WINTERSPRING, remainingWinterspring);
+            }
         };
 
-        sendWS(WORLD_STATE_SCOURGE_INVASION_VICTORIES, _data.battlesWon);
-        for (auto const& def : g_invasionZoneDefs)
-        {
-            bool active = _data.remaining[def.remainingIdx] > 0;
-            uint32 wsId = 0;
-            switch (def.zoneId)
-            {
-                case AREA_WINTERSPRING:        wsId = WORLD_STATE_SCOURGE_INVASION_WINTERSPRING; break;
-                case AREA_TANARIS:             wsId = WORLD_STATE_SCOURGE_INVASION_TANARIS; break;
-                case AREA_AZSHARA:             wsId = WORLD_STATE_SCOURGE_INVASION_AZSHARA; break;
-                case AREA_BLASTED_LANDS:       wsId = WORLD_STATE_SCOURGE_INVASION_BLASTED_LANDS; break;
-                case AREA_EASTERN_PLAGUELANDS: wsId = WORLD_STATE_SCOURGE_INVASION_EASTERN_PLAGUELANDS; break;
-                case AREA_BURNING_STEPPES:     wsId = WORLD_STATE_SCOURGE_INVASION_BURNING_STEPPES; break;
-            }
-            if (wsId)
-            {
-                uint32 value = active ? 1 : 0;
-                sendWS(wsId, value);
-                sWorld->setWorldState(wsId, value);
-            }
+        sMapMgr->DoForAllMapsWithMapId(0, sendToMap);
+        sMapMgr->DoForAllMapsWithMapId(1, sendToMap);
+    }
 
-            uint32 wsNecroId = 0;
-            switch (def.zoneId)
-            {
-                case AREA_WINTERSPRING:        wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_WINTERSPRING; break;
-                case AREA_TANARIS:             wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_TANARIS; break;
-                case AREA_AZSHARA:             wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_AZSHARA; break;
-                case AREA_BLASTED_LANDS:       wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_BLASTED_LANDS; break;
-                case AREA_EASTERN_PLAGUELANDS: wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_EASTERN_PLAGUELANDS; break;
-                case AREA_BURNING_STEPPES:     wsNecroId = WORLD_STATE_SCOURGE_INVASION_NECROPOLIS_BURNING_STEPPES; break;
-            }
-            if (wsNecroId)
-            {
-                sendWS(wsNecroId, _data.remaining[def.remainingIdx]);
-                sWorld->setWorldState(wsNecroId, _data.remaining[def.remainingIdx]);
-            }
+    void HandleDefendedZones()
+    {
+        uint32 battlesWon = GetBattlesWon();
+        if (battlesWon < 50)
+        {
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS, true);
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS, true);
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS, true);
         }
-        sWorld->SendGlobalMessage(&data);
+        else if (battlesWon < 100)
+        {
+            if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS))
+                sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS, true);
+        }
+        else if (battlesWon < 150)
+        {
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS, true);
+            if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS))
+                sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS, true);
+        }
+        else
+        {
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS, true);
+            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS))
+                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS, true);
+            if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS))
+                sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS, true);
+            if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_INVASIONS_DONE))
+                sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_INVASIONS_DONE, true);
+        }
+    }
+
+    // ---- invasion zone handling (world thread only) ----
+
+    bool IsActiveZone(uint32 zoneId)
+    {
+        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
+        if (!def)
+            return false;
+
+        ObjectGuid mouthGuid = GetMouthGuid(zoneId);
+        if (mouthGuid.IsEmpty())
+            return false;
+
+        Map* map = sMapMgr->FindMap(def->map, 0);
+        return map && map->GetCreature(mouthGuid);
+    }
+
+    uint32 GetActiveZones()
+    {
+        uint32 count = 0;
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
+            if (IsActiveZone(def.zoneId))
+                ++count;
+        return count;
     }
 
     void StartNewInvasionIfTime(uint32 zoneId)
@@ -329,8 +576,7 @@ public:
         if (!def)
             return;
 
-        TimePoint now = std::chrono::steady_clock::now();
-        if (_data.timers[def->timerIdx] != TimePoint() && now < _data.timers[def->timerIdx])
+        if (std::chrono::steady_clock::now() < GetSITimer(def->timerIdx))
             return;
 
         StartNewInvasion(zoneId);
@@ -342,317 +588,211 @@ public:
         if (!def)
             return;
 
-        TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} map={}", zoneId, def->map);
+        if (IsActiveZone(zoneId))
+            return;
 
-        _data.remaining[def->remainingIdx] = def->necropolisCount;
-        _data.lastAttackZone = zoneId;
+        // Don't attack the same zone as before.
+        if (zoneId == GetLastAttackZone())
+            return;
 
-        Map* map = sMapMgr->FindMap(def->map, 0);
+        // After the first victory never run more than 2 simultaneous invasions.
+        if (GetActiveZones() > 1 && GetBattlesWon() > 0)
+            return;
+
+        Map* map = sMapMgr->CreateBaseMap(def->map);
         if (!map)
         {
-            TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} FAILED - no map!", zoneId);
-            AddPendingInvasion(zoneId);
-            _data.remaining[def->remainingIdx] = 0;
+            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] StartNewInvasion unable to access map {}, retrying next tick.", def->map);
             return;
         }
 
-        TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} got map, spawning all units...", zoneId);
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Starting new invasion in zone {}.", zoneId);
 
-        // 1. Summon Herald at mouth position
-        Creature* mouth = map->SummonCreature(NPC_HERALD_OF_THE_LICH_KING,
-            Position(def->mouthX, def->mouthY, def->mouthZ, 0.0f));
-        if (!mouth)
-        {
-            TC_LOG_ERROR("scripts", "[Scourge] FAILED to summon Herald!");
-            return;
-        }
+        if (!sGameEventMgr->IsActiveEvent(def->gameEventId))
+            sGameEventMgr->StartEvent(def->gameEventId, true);
 
-        TC_LOG_ERROR("scripts", "[Scourge] Herald spawned GUID={}", mouth->GetGUID().ToString());
-        SetMouthGuid(zoneId, mouth->GetGUID());
-        mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
-
-        // 2. Spawn 15 ground troops around Herald
-        uint32 groundEntries[] = { 16422, 16423, 16141, 16298, 16299 };
-        uint32 gruntCount = 0;
-        for (uint32 i = 0; i < 15; ++i)
-        {
-            float angle = float(i) * (2.0f * M_PI / 15.0f);
-            float dist = 30.0f + urand(0, 30);
-            float x = def->mouthX + std::cos(angle) * dist;
-            float y = def->mouthY + std::sin(angle) * dist;
-            if (Creature* grunt = mouth->SummonCreature(groundEntries[urand(0, 4)],
-                Position(x, y, def->mouthZ, 0.0f)))
-            {
-                grunt->setActive(true);
-                grunt->SetReactState(REACT_AGGRESSIVE);
-                gruntCount++;
-            }
-        }
-        TC_LOG_ERROR("scripts", "[Scourge] Summoned {} ground troops", gruntCount);
-
-        // 3. Summon Necropolis GOs + Shards (NO game events — all code-direct)
-        int goIdx = GetNecropolisGOIndex(zoneId);
-        if (goIdx >= 0)
-        {
-            uint32 neckCount = def->necropolisCount;
-            for (uint32 n = 0; n < neckCount; ++n)
-            {
-                NecropolisGOPos const& pos = g_necropolisGOs[goIdx][n];
-                if (pos.goEntry == 0) continue;
-
-                // Summon visible Necropolis GO
-                mouth->SummonGameObject(pos.goEntry,
-                    Position(pos.x, pos.y, pos.z, 0.0f), QuaternionData(), 0s);
-                TC_LOG_ERROR("scripts", "[Scourge] Necropolis GO spawned entry={}", pos.goEntry);
-
-                // Summon Necrotic Shards near Necropolis
-                for (uint32 s = 0; s < 2; ++s)
-                {
-                    float sx = pos.x + std::cos(float(s) * M_PI) * 40.0f;
-                    float sy = pos.y + std::sin(float(s) * M_PI) * 40.0f;
-                    if (Creature* shard = mouth->SummonCreature(NPC_NECROTIC_SHARD,
-                        Position(sx, sy, pos.z, 0.0f)))
-                    {
-                        shard->setActive(true);
-                        TC_LOG_ERROR("scripts", "[Scourge] Shard spawned GUID={}", shard->GetGUID().ToString());
-                    }
-                }
-            }
-        }
-
+        SummonMouth(map, *def, true);
         BroadcastWorldStates();
         SaveToDB();
     }
+
+    bool ResumeInvasion(InvasionZoneDef const& def)
+    {
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Resuming invasion in zone {} ({} necropolises remaining).", def.zoneId, GetSIRemaining(def.remainingIdx));
+
+        Map* map = sMapMgr->CreateBaseMap(def.map);
+        if (!map)
+        {
+            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] ResumeInvasion unable to access map {}, retrying next tick.", def.map);
+            return false;
+        }
+
+        return SummonMouth(map, def, false);
+    }
+
+    bool SummonMouth(Map* map, InvasionZoneDef const& def, bool newInvasion)
+    {
+        if (Creature* existingMouth = map->GetCreature(GetMouthGuid(def.zoneId)))
+            existingMouth->DespawnOrUnsummon();
+
+        Creature* mouth = map->SummonCreature(NPC_HERALD_OF_THE_LICH_KING, def.mouth);
+        if (!mouth)
+        {
+            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] Failed to summon Herald of the Lich King in zone {}.", def.zoneId);
+            return false;
+        }
+
+        SetMouthGuid(def.zoneId, mouth->GetGUID());
+        if (newInvasion)
+            SetSIRemaining(def.remainingIdx, def.necropolisCount);
+        mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
+        return true;
+    }
+
+    void HandleActiveZone(InvasionZoneDef const& def, TimePoint now)
+    {
+        TimePoint timer = GetSITimer(def.timerIdx);
+        uint32 remaining = GetSIRemaining(def.remainingIdx);
+        ObjectGuid mouthGuid = GetMouthGuid(def.zoneId);
+        Map* map = sMapMgr->FindMap(def.map, 0);
+
+        TimePoint nextAttack = now + std::chrono::seconds(urand(ZONE_ATTACK_TIMER_MIN, ZONE_ATTACK_TIMER_MAX));
+
+        if (!mouthGuid.IsEmpty())
+        {
+            Creature* mouth = map ? map->GetCreature(mouthGuid) : nullptr;
+            if (!mouth)
+                SetMouthGuid(def.zoneId, ObjectGuid::Empty); // re-summon handled next tick
+            else if (timer < now && remaining == 0)
+            {
+                // Zone defended: all necropolises destroyed.
+                SetSITimer(def.timerIdx, nextAttack);
+                AddBattlesWon(1);
+                SetLastAttackZone(def.zoneId);
+                SetMouthGuid(def.zoneId, ObjectGuid::Empty);
+                mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_STOP);
+
+                TC_LOG_INFO("gameevent", "[ScourgeInvasion] The Scourge has been defeated in zone {} ({} victories).", def.zoneId, GetBattlesWon());
+
+                BroadcastWorldStates();
+                SaveToDB();
+            }
+        }
+        else
+        {
+            // If more than one zone is already being attacked, push the timer.
+            if (GetActiveZones() > 1)
+                SetSITimer(def.timerIdx, nextAttack);
+
+            if (remaining > 0)
+                ResumeInvasion(def); // invasion incomplete but mouth is gone (e.g. after restart)
+            else
+                StartNewInvasionIfTime(def.zoneId);
+        }
+    }
+
+    // ---- city attacks (world thread only) ----
 
     void StartNewCityAttackIfTime(uint32 zoneId)
     {
-        PallidAttackDef const* def = nullptr;
-        for (auto const& d : g_pallidDefs)
-            if (d.zoneId == zoneId)
-                def = &d;
-
+        CityAttackDef const* def = FindCityAttackByZoneId(zoneId);
         if (!def)
             return;
 
         TimePoint now = std::chrono::steady_clock::now();
-        if (_data.timers[def->timerIdx] != TimePoint() && now < _data.timers[def->timerIdx])
+        if (now < GetSITimer(def->timerIdx))
             return;
 
-        StartNewCityAttack(zoneId);
+        if (StartNewCityAttack(zoneId))
+            SetSITimer(def->timerIdx, now + std::chrono::seconds(urand(CITY_ATTACK_TIMER_MIN, CITY_ATTACK_TIMER_MAX)));
     }
 
-    void StartNewCityAttack(uint32 zoneId)
+    bool StartNewCityAttack(uint32 zoneId)
     {
-        PallidAttackDef const* def = nullptr;
-        for (auto const& d : g_pallidDefs)
-            if (d.zoneId == zoneId)
-                def = &d;
-
+        CityAttackDef const* def = FindCityAttackByZoneId(zoneId);
         if (!def)
-            return;
+            return false;
 
-        Map* map = sMapMgr->FindMap(def->map, 0);
+        Map* map = sMapMgr->CreateBaseMap(def->map);
         if (!map)
-        {
-            AddPendingPallid(zoneId);
-            return;
-        }
-
-        // Despawn old pallid
-        ObjectGuid oldPallid = GetPallidGuid(zoneId);
-        if (Creature* old = map->GetCreature(oldPallid))
-            old->DespawnOrUnsummon();
+            return false;
 
         uint32 spawnIdx = urand(0, 1);
-        Creature* pallid = map->SummonCreature(NPC_PALLID_HORROR,
-            Position(def->pallidX[spawnIdx], def->pallidY[spawnIdx], def->pallidZ[spawnIdx], 0.0f));
-        if (pallid)
-            SetPallidGuid(zoneId, pallid->GetGUID());
 
+        if (Creature* existingPallid = map->GetCreature(GetPallidGuid(zoneId)))
+            existingPallid->DespawnOrUnsummon();
+
+        Creature* pallid = map->SummonCreature(NPC_PALLID_HORROR, def->pallid[spawnIdx]);
+        if (!pallid)
+        {
+            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] Failed to summon Pallid Horror in zone {}.", zoneId);
+            return false;
+        }
+
+        pallid->GetMotionMaster()->Clear();
+        pallid->GetMotionMaster()->MovePath(def->path[spawnIdx], false);
+        SetPallidGuid(zoneId, pallid->GetGUID());
+
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] City attack started in zone {}.", zoneId);
         SaveToDB();
+        return true;
     }
 
-    void HandleZoneNecropolisDestroyed(uint32 zoneId)
+    // Called from npc_pallid_horror::JustDied (map thread): only state updates, no game event calls.
+    void OnPallidDeath(uint32 zoneId)
     {
-        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
+        CityAttackDef const* def = FindCityAttackByZoneId(zoneId);
         if (!def)
             return;
 
-        if (_data.remaining[def->remainingIdx] > 0)
-            _data.remaining[def->remainingIdx]--;
-
-        if (_data.remaining[def->remainingIdx] == 0)
-        {
-            // All necropoli destroyed, stop the event
-            if (Creature* mouth = GetMouthCreature(zoneId))
-                mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_STOP);
-
-            _data.timers[def->timerIdx] = std::chrono::steady_clock::now() + std::chrono::seconds(urand(ZONE_ATTACK_TIMER_MIN, ZONE_ATTACK_TIMER_MAX));
-            AddBattlesWon(1);
-
-            // Stop game event
-            uint32 gameEventId = 0;
-            switch (zoneId)
-            {
-                case AREA_WINTERSPRING:        gameEventId = GAME_EVENT_SCOURGE_INVASION_WINTERSPRING; break;
-                case AREA_TANARIS:             gameEventId = GAME_EVENT_SCOURGE_INVASION_TANARIS; break;
-                case AREA_AZSHARA:             gameEventId = GAME_EVENT_SCOURGE_INVASION_AZSHARA; break;
-                case AREA_BLASTED_LANDS:       gameEventId = GAME_EVENT_SCOURGE_INVASION_BLASTED_LANDS; break;
-                case AREA_EASTERN_PLAGUELANDS: gameEventId = GAME_EVENT_SCOURGE_INVASION_EASTERN_PLAGUELANDS; break;
-                case AREA_BURNING_STEPPES:     gameEventId = GAME_EVENT_SCOURGE_INVASION_BURNING_STEPPES; break;
-            }
-            if (gameEventId && sGameEventMgr->IsActiveEvent(gameEventId))
-                sGameEventMgr->StopEvent(gameEventId, true);
-
-            BroadcastWorldStates();
-            SaveToDB();
-        }
-    }
-
-    Creature* GetMouthCreature(uint32 zoneId)
-    {
-        ObjectGuid guid = GetMouthGuid(zoneId);
-        if (guid.IsEmpty())
-            return nullptr;
-        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
-        if (!def)
-            return nullptr;
-        Map* map = sMapMgr->FindMap(def->map, 0);
-        if (!map)
-            return nullptr;
-        return map->GetCreature(guid);
-    }
-
-    void ProcessPending()
-    {
-        // Process pending invasions
-        for (auto it = _data.pendingInvasions.begin(); it != _data.pendingInvasions.end();)
-        {
-            uint32 zoneId = *it;
-            InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
-            if (def)
-                if (sMapMgr->FindMap(def->map, 0))
-                {
-                    it = _data.pendingInvasions.erase(it);
-                    StartNewInvasion(zoneId);
-                    continue;
-                }
-            ++it;
-        }
-
-        // Process pending pallids
-        for (auto it = _data.pendingPallids.begin(); it != _data.pendingPallids.end();)
-        {
-            uint32 zoneId = *it;
-            for (auto const& def : g_pallidDefs)
-                if (def.zoneId == zoneId)
-                    if (sMapMgr->FindMap(def.map, 0))
-                    {
-                        it = _data.pendingPallids.erase(it);
-                        StartNewCityAttack(zoneId);
-                        continue;
-                    } // closes if (def.zoneId == zoneId)
-            ++it;
-        }
-    }
-
-    void Update()
-    {
-        if (_data.state != SI_STATE_ENABLED)
-            return;
-
-        ProcessPending();
-
-        // Check zone attack timers
-        for (auto const& def : g_invasionZoneDefs)
-        {
-            if (_data.remaining[def.remainingIdx] > 0)
-                continue; // Already active
-
-            TimePoint timer = _data.timers[def.timerIdx];
-            if (timer != TimePoint() && std::chrono::steady_clock::now() >= timer)
-                StartNewInvasion(def.zoneId);
-        }
-
-        // Check city attack timers
-        for (auto const& def : g_pallidDefs)
-        {
-            if (_data.timers[def.timerIdx] != TimePoint() && std::chrono::steady_clock::now() >= _data.timers[def.timerIdx])
-            {
-                ObjectGuid guid = GetPallidGuid(def.zoneId);
-                if (guid.IsEmpty())
-                    StartNewCityAttack(def.zoneId);
-            }
-        }
-    }
-
-    void HandleDefendedZones()
-    {
-        // Handle milestone events (50/100/150 invasions)
-        if (_data.battlesWon >= 50 && !sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_50_INVASIONS, true);
-        if (_data.battlesWon >= 100 && !sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_100_INVASIONS, true);
-        if (_data.battlesWon >= 150 && !sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_150_INVASIONS, true);
-    }
-
-    void StartEvents()
-    {
-        TC_LOG_ERROR("scripts", "[Scourge] StartEvents called, state={}", uint32(_data.state));
-
-        // Reset remaining to 0 so Update() will trigger new invasions
-        for (auto const& def : g_invasionZoneDefs)
-            _data.remaining[def.remainingIdx] = 0;
-
-        // Set initial timers if not already set
-        TimePoint now = std::chrono::steady_clock::now();
-        for (auto const& def : g_invasionZoneDefs)
-        {
-            if (_data.timers[def.timerIdx] == TimePoint())
-                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(60, 120));
-        }
-        for (auto const& def : g_pallidDefs)
-        {
-            if (_data.timers[def.timerIdx] == TimePoint())
-                _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(120, 240));
-        }
-
-        SaveToDB();
-        BroadcastWorldStates();
-    }
-
-    void StopEvents()
-    {
-        for (auto const& def : g_invasionZoneDefs)
-            _data.remaining[def.remainingIdx] = 0;
-        BroadcastWorldStates();
+        SetSITimer(def->timerIdx, std::chrono::steady_clock::now() + std::chrono::seconds(urand(CITY_ATTACK_TIMER_MIN, CITY_ATTACK_TIMER_MAX)));
+        SetPallidGuid(zoneId, ObjectGuid::Empty);
         SaveToDB();
     }
 
 private:
-    ScourgeInvasionData _data;
-
     ScourgeInvasionMgr() = default;
+
+    mutable std::mutex _mutex;
+    SIState _state = SI_STATE_DISABLED;
+    TimePoint _timers[SI_TIMER_MAX];
+    uint32 _battlesWon = 0;
+    uint32 _lastAttackZone = 0;
+    uint32 _remaining[SI_REMAINING_MAX] = {};
+    uint32 _broadcastTimer = 10000;
+    std::map<uint32, ObjectGuid> _mouthGuids;
+    std::map<uint32, ObjectGuid> _pallidGuids;
 };
 
 #define sScourgeInvasionMgr ScourgeInvasionMgr::instance()
 
-// ===== NPC: go_necropolis =====
+// ===== GO: Necropolis =====
 
 struct go_necropolis : public GameObjectAI
 {
-    go_necropolis(GameObject* go) : GameObjectAI(go) { }
+    go_necropolis(GameObject* go) : GameObjectAI(go)
+    {
+        me->setActive(true);
+    }
 };
 
-// ===== NPC: Herald of the Lich King =====
+// ===== NPC: Herald of the Lich King (Mouth of Kel'Thuzad) =====
 
 struct npc_herald_of_the_lich_king : public ScriptedAI
 {
     npc_herald_of_the_lich_king(Creature* creature) : ScriptedAI(creature)
     {
         me->SetReactState(REACT_PASSIVE);
+    }
+
+    void InitializeAI() override
+    {
         me->setActive(true);
+        _scheduler.Schedule(Minutes(5), [this](TaskContext context)
+        {
+            Talk(HERALD_OF_THE_LICH_KING_SAY_ATTACK_RANDOM);
+            context.Repeat(Minutes(15), Minutes(30));
+        });
     }
 
     void DoAction(int32 action) override
@@ -660,35 +800,38 @@ struct npc_herald_of_the_lich_king : public ScriptedAI
         if (action == EVENT_HERALD_OF_THE_LICH_KING_ZONE_START)
         {
             Talk(HERALD_OF_THE_LICH_KING_SAY_ATTACK_START);
+            ChangeZoneEventStatus(true);
             UpdateWeather(true);
         }
         else if (action == EVENT_HERALD_OF_THE_LICH_KING_ZONE_STOP)
         {
             Talk(HERALD_OF_THE_LICH_KING_SAY_ATTACK_END);
+            ChangeZoneEventStatus(false);
             UpdateWeather(false);
             me->DespawnOrUnsummon();
         }
     }
 
-    void UpdateWeather(bool start)
+    // Only invoked through DoAction from the manager (world thread): safe to touch GameEventMgr.
+    void ChangeZoneEventStatus(bool start)
     {
-        Weather* weather = me->GetMap()->GetOrGenerateZoneDefaultWeather(me->GetZoneId());
-        if (weather)
+        InvasionZoneDef const* def = FindInvasionZoneByZoneId(me->GetZoneId());
+        if (!def)
+            return;
+
+        if (start)
         {
-            if (start)
-                weather->SetWeather(WEATHER_TYPE_STORM, 0.25f);
-            else
-                weather->SetWeather(WEATHER_TYPE_RAIN, 0.0f);
+            if (!sGameEventMgr->IsActiveEvent(def->gameEventId))
+                sGameEventMgr->StartEvent(def->gameEventId, true);
         }
+        else if (sGameEventMgr->IsActiveEvent(def->gameEventId))
+            sGameEventMgr->StopEvent(def->gameEventId, true);
     }
 
-    void InitializeAI() override
+    void UpdateWeather(bool start)
     {
-        _scheduler.Schedule(Minutes(1), [this](TaskContext context)
-        {
-            Talk(HERALD_OF_THE_LICH_KING_SAY_ATTACK_RANDOM);
-            context.Repeat(Minutes(15), Minutes(30));
-        });
+        if (Weather* weather = me->GetMap()->GetOrGenerateZoneDefaultWeather(me->GetZoneId()))
+            weather->SetWeather(start ? WEATHER_TYPE_STORM : WEATHER_TYPE_RAIN, start ? 0.25f : 0.0f);
     }
 
     void UpdateAI(uint32 diff) override
@@ -700,7 +843,7 @@ private:
     TaskScheduler _scheduler;
 };
 
-// ===== NPC: Necropolis =====
+// ===== NPC: Necropolis (invisible anchor below the necropolis GO) =====
 
 struct npc_necropolis : public ScriptedAI
 {
@@ -709,14 +852,36 @@ struct npc_necropolis : public ScriptedAI
         me->setActive(true);
     }
 
+    void InitializeAI() override
+    {
+        // Start the purple lightning pulse shortly after the necropolis anchor spawns.
+        _communiqueTimer = 5000;
+    }
+
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
     {
-        if (me->HasAura(SPELL_COMMUNIQUE_TIMER_NECROPOLIS))
+        // Proxy acknowledged the chain; keep the pulse running (no timer aura — it auto-casts 28373 via AoE).
+        if (spell->Id == SPELL_COMMUNIQUE_PROXY_TO_NECROPOLIS && !_communiqueTimer)
+            _communiqueTimer = 15000;
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        if (!_communiqueTimer)
             return;
 
-        if (spell->Id == SPELL_COMMUNIQUE_PROXY_TO_NECROPOLIS)
-            DoCastSelf(SPELL_COMMUNIQUE_TIMER_NECROPOLIS, true);
+        if (_communiqueTimer <= diff)
+        {
+            _communiqueTimer = 15000;
+            if (Creature* proxy = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_PROXY, 200.0f))
+                me->CastSpell(proxy, SPELL_COMMUNIQUE_NECROPOLIS_TO_PROXIES, true);
+        }
+        else
+            _communiqueTimer -= diff;
     }
+
+private:
+    uint32 _communiqueTimer = 0;
 };
 
 // ===== NPC: Necropolis Health =====
@@ -725,14 +890,16 @@ struct npc_necropolis_health : public ScriptedAI
 {
     npc_necropolis_health(Creature* creature) : ScriptedAI(creature)
     {
-        me->SetFullHealth();
+        me->setActive(true);
+        me->SetFullHealth(); // RegenHealth is disabled
     }
 
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
     {
         if (spell->Id == SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH)
-            DoCastSelf(SPELL_ZAP_NECROPOLIS, true);
+            DoCastSelf(SPELL_ZAP_NECROPOLIS, true); // deals damage to self
 
+        // Just to make sure it finally dies!
         if (spell->Id == SPELL_ZAP_NECROPOLIS)
             if (++_zapCount >= 3)
                 me->KillSelf();
@@ -740,39 +907,44 @@ struct npc_necropolis_health : public ScriptedAI
 
     void JustDied(Unit* /*killer*/) override
     {
-        if (Creature* necropolis = me->FindNearestCreature(NPC_NECROPOLIS, 10.0f))
+        if (Creature* necropolis = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS, ATTACK_DISTANCE))
             me->CastSpell(necropolis, SPELL_DESPAWNER_OTHER, true);
 
-        uint32 zoneId = me->GetZoneId();
-        if (FindInvasionZoneByZoneId(zoneId))
-            sScourgeInvasionMgr->HandleZoneNecropolisDestroyed(zoneId);
+        InvasionZoneDef const* def = FindInvasionZoneByZoneId(me->GetZoneId());
+        if (!def)
+            return;
+
+        uint32 remaining = sScourgeInvasionMgr->GetSIRemaining(def->remainingIdx);
+        if (remaining > 0)
+            sScourgeInvasionMgr->SetSIRemaining(def->remainingIdx, remaining - 1);
     }
 
     void SpellHitTarget(WorldObject* target, SpellInfo const* spellInfo) override
     {
+        // Make sure necropolis despawns after SPELL_DESPAWNER_OTHER is triggered.
         if (spellInfo->Id == SPELL_DESPAWNER_OTHER && target->GetEntry() == NPC_NECROPOLIS)
         {
-            DespawnNecropolis();
-            if (Creature* c = target->ToCreature())
-                c->DespawnOrUnsummon();
-            me->DespawnOrUnsummon();
+            DespawnNecropolisGO();
+            if (Creature* creature = target->ToCreature())
+                creature->DespawnOrUnsummon(0ms, Seconds(DAY));
+            me->DespawnOrUnsummon(0ms, Seconds(DAY));
         }
     }
 
-    void DespawnNecropolis()
+    void DespawnNecropolisGO()
     {
-        uint32 const necropolisEntries[] = { GO_NECROPOLIS_TINY, GO_NECROPOLIS_SMALL, GO_NECROPOLIS_MEDIUM, GO_NECROPOLIS_BIG, GO_NECROPOLIS_HUGE };
-        for (uint32 entry : necropolisEntries)
+        uint32 const entries[] = { GO_NECROPOLIS_TINY, GO_NECROPOLIS_SMALL, GO_NECROPOLIS_MEDIUM, GO_NECROPOLIS_BIG, GO_NECROPOLIS_HUGE };
+        for (uint32 entry : entries)
         {
-            std::list<GameObject*> necropolisList;
-            me->GetGameObjectListWithEntryInGrid(necropolisList, entry, 10.0f);
-            for (GameObject* go : necropolisList)
-                go->DespawnOrUnsummon();
+            std::list<GameObject*> goList;
+            me->GetGameObjectListWithEntryInGrid(goList, entry, ATTACK_DISTANCE);
+            for (GameObject* go : goList)
+                go->DespawnOrUnsummon(0ms, Seconds(DAY));
         }
     }
 
 private:
-    int _zapCount = 0;
+    int _zapCount = 0; // 3 = death
 };
 
 // ===== NPC: Necropolis Proxy =====
@@ -782,8 +954,6 @@ struct npc_necropolis_proxy : public ScriptedAI
     npc_necropolis_proxy(Creature* creature) : ScriptedAI(creature)
     {
         me->setActive(true);
-        me->SetDisplayId(11686); // invisible
-        me->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
     }
 
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
@@ -791,22 +961,27 @@ struct npc_necropolis_proxy : public ScriptedAI
         switch (spell->Id)
         {
             case SPELL_COMMUNIQUE_NECROPOLIS_TO_PROXIES:
-                DoCastSelf(SPELL_COMMUNIQUE_PROXY_TO_RELAY, true);
+                if (Creature* relay = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_RELAY, 200.0f))
+                    me->CastSpell(relay, SPELL_COMMUNIQUE_PROXY_TO_RELAY, true);
                 break;
             case SPELL_COMMUNIQUE_RELAY_TO_PROXY:
-                DoCastSelf(SPELL_COMMUNIQUE_PROXY_TO_NECROPOLIS, true);
+                if (Creature* necropolis = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS, 200.0f))
+                    me->CastSpell(necropolis, SPELL_COMMUNIQUE_PROXY_TO_NECROPOLIS, true);
                 break;
             case SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH:
-                if (Creature* health = me->FindNearestCreature(NPC_NECROPOLIS_HEALTH, 200.0f))
+                if (Creature* health = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_HEALTH, 200.0f))
                     me->CastSpell(health, SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH, true);
+                break;
+            default:
                 break;
         }
     }
 
     void SpellHitTarget(WorldObject* /*target*/, SpellInfo const* spell) override
     {
+        // Despawn after forwarding the death communique to avoid being hit again.
         if (spell->Id == SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH)
-            me->DespawnOrUnsummon();
+            me->DespawnOrUnsummon(0ms, Seconds(DAY));
     }
 };
 
@@ -817,8 +992,6 @@ struct npc_necropolis_relay : public ScriptedAI
     npc_necropolis_relay(Creature* creature) : ScriptedAI(creature)
     {
         me->setActive(true);
-        me->SetDisplayId(11686); // invisible
-        me->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
     }
 
     void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
@@ -826,14 +999,18 @@ struct npc_necropolis_relay : public ScriptedAI
         switch (spell->Id)
         {
             case SPELL_COMMUNIQUE_PROXY_TO_RELAY:
-                DoCastSelf(SPELL_COMMUNIQUE_RELAY_TO_CAMP, true);
+                if (Creature* shard = GetClosestNecroticShard(me, 200.0f))
+                    me->CastSpell(shard, SPELL_COMMUNIQUE_RELAY_TO_CAMP, true);
                 break;
             case SPELL_COMMUNIQUE_CAMP_TO_RELAY:
-                DoCastSelf(SPELL_COMMUNIQUE_RELAY_TO_PROXY, true);
+                if (Creature* proxy = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_PROXY, 200.0f))
+                    me->CastSpell(proxy, SPELL_COMMUNIQUE_RELAY_TO_PROXY, true);
                 break;
             case SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH:
-                if (Creature* proxy = me->FindNearestCreature(NPC_NECROPOLIS_PROXY, 200.0f))
+                if (Creature* proxy = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_PROXY, 200.0f))
                     me->CastSpell(proxy, SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH, true);
+                break;
+            default:
                 break;
         }
     }
@@ -841,11 +1018,11 @@ struct npc_necropolis_relay : public ScriptedAI
     void SpellHitTarget(WorldObject* /*target*/, SpellInfo const* spell) override
     {
         if (spell->Id == SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH)
-            me->DespawnOrUnsummon();
+            me->DespawnOrUnsummon(0ms, Seconds(DAY));
     }
 };
 
-// ===== NPC: Necrotic Shard =====
+// ===== NPC: Necrotic Shard / Damaged Necrotic Shard =====
 
 struct npc_necrotic_shard : public ScriptedAI
 {
@@ -853,6 +1030,7 @@ struct npc_necrotic_shard : public ScriptedAI
     {
         me->setActive(true);
         me->SetReactState(REACT_PASSIVE);
+        // No healing possible.
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL, true);
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL_PCT, true);
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL_MAX_HEALTH, true);
@@ -861,125 +1039,323 @@ struct npc_necrotic_shard : public ScriptedAI
 
     void Reset() override
     {
-        _events.Reset();
+        _scheduler.CancelAll();
+        ScheduleTasks();
+    }
+
+    void ScheduleTasks()
+    {
         if (me->GetEntry() == NPC_NECROTIC_SHARD)
         {
-            _events.ScheduleEvent(EVENT_SHARD_MINION_SPAWNER_SMALL, 5s);
-            _events.ScheduleEvent(EVENT_SHARD_MINION_SPAWNER_BUTTRESS, 5s);
-            _events.ScheduleEvent(EVENT_SHARD_FIND_DAMAGED_SHARD, 10s);
-        }
-        if (me->GetEntry() == NPC_DAMAGED_NECROTIC_SHARD)
-        {
-            _events.ScheduleEvent(EVENT_CULTIST_CHANNELING, 100ms);
-        }
-    }
-
-    void UpdateAI(uint32 diff) override
-    {
-        _events.Update(diff);
-
-        while (uint32 eventId = _events.ExecuteEvent())
-        {
-            switch (eventId)
+            // Remove accidental shard duplicates on the same spot.
+            for (uint32 entry : { uint32(NPC_NECROTIC_SHARD), uint32(NPC_DAMAGED_NECROTIC_SHARD) })
             {
-                case EVENT_SHARD_MINION_SPAWNER_SMALL:
-                    HandleMinionSpawner();
-                    _events.Repeat(5s);
-                    break;
-                case EVENT_SHARD_MINION_SPAWNER_BUTTRESS:
-                    HandleCultistSpawner();
-                    _events.Repeat(1h);
-                    break;
-                case EVENT_SHARD_FIND_DAMAGED_SHARD:
-                    CheckForDamage();
-                    _events.Repeat(10s);
-                    break;
-                case EVENT_CULTIST_CHANNELING:
-                    // Look for cultists channeling
-                    break;
+                std::list<Creature*> shardList;
+                me->GetCreatureListWithEntryInGrid(shardList, entry, CONTACT_DISTANCE);
+                for (Creature* shard : shardList)
+                    if (shard != me)
+                        shard->DespawnOrUnsummon();
             }
-        }
-    }
 
-    void HandleMinionSpawner()
-    {
-        // Directly spawn minions (no spell chain — skip MinionSpawner NPCs entirely)
-        uint32 entries[] = { 16141, 16298, 16299, 16422, 16423 };
-        uint32 entry = entries[urand(0, 4)];
-        if (Creature* minion = me->SummonCreature(entry, me->GetPosition(),
-            TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 5min))
+            // Check if camp doodads are spawned shortly after spawn. If not: respawn them.
+            _scheduler.Schedule(Seconds(10), [this](TaskContext /*context*/)
+            {
+                uint32 const doodads[] = { GO_UNDEAD_FIRE, GO_UNDEAD_FIRE_AURA, GO_SKULLPILE_01, GO_SKULLPILE_02, GO_SKULLPILE_03, GO_SKULLPILE_04 };
+                for (uint32 entry : doodads)
+                {
+                    std::list<GameObject*> goList;
+                    me->GetGameObjectListWithEntryInGrid(goList, entry, 50.0f);
+                    for (GameObject* go : goList)
+                        if (go && !go->isSpawned())
+                        {
+                            go->SetRespawnTime(0);
+                            go->Respawn();
+                        }
+                }
+            });
+        }
+        else if (me->GetEntry() == NPC_DAMAGED_NECROTIC_SHARD)
         {
-            minion->setActive(true);
-            minion->SetReactState(REACT_AGGRESSIVE);
-            float angle = frand(0, 2 * M_PI);
-            float dist = frand(5, 20);
-            minion->GetMotionMaster()->MovePoint(0,
-                me->GetPositionX() + std::cos(angle) * dist,
-                me->GetPositionY() + std::sin(angle) * dist,
-                me->GetPositionZ());
+            UpdateFindersAmount();
+            ScheduleMinionSpawnTask();
+            ScheduleCultistSpawnTask();
+        }
+
+        // If the summoning circle is gone (game event stopped), clean up and despawn.
+        _scheduler.Schedule(Seconds(25), [this](TaskContext context)
+        {
+            if (!GetClosestGameObjectWithEntry(me, GO_SUMMON_CIRCLE, 2.0f))
+            {
+                DespawnEventDoodads();
+                me->DespawnOrUnsummon();
+                return;
+            }
+            context.Repeat(Seconds(60));
+        });
+    }
+
+    void ScheduleMinionSpawnTask()
+    {
+        if (_minionTaskScheduled)
+            return;
+        _minionTaskScheduled = true;
+
+        _scheduler.Schedule(Seconds(5), [this](TaskContext context) // Spawn minions every 5 seconds.
+        {
+            HandleShardMinionSpawnerSmall();
+            context.Repeat(Seconds(5));
+        });
+    }
+
+    // Placeholder for SPELL_MINION_SPAWNER_BUTTRESS [27888]: respawn the Cultists every hour.
+    void ScheduleCultistSpawnTask()
+    {
+        _scheduler.Schedule(Seconds(5), [this](TaskContext context)
+        {
+            DespawnShadowsOfDoom();
+            SummonCultists();
+            context.Repeat(Hours(1));
+        });
+    }
+
+    bool HasCampTypeAura() const
+    {
+        return me->HasAura(SPELL_CAMP_TYPE_GHOST_SKELETON) || me->HasAura(SPELL_CAMP_TYPE_GHOST_GHOUL) || me->HasAura(SPELL_CAMP_TYPE_GHOUL_SKELETON);
+    }
+
+    void SpellHit(WorldObject* caster, SpellInfo const* spell) override
+    {
+        switch (spell->Id)
+        {
+            case SPELL_ZAP_CRYSTAL_CORPSE: // from a dying Shadow of Doom
+            {
+                Unit::DealDamage(me, me, me->GetMaxHealth() / 4, nullptr, DIRECT_DAMAGE, SPELL_SCHOOL_MASK_NORMAL, nullptr, false);
+                if (++_zapCount >= 4)
+                    me->KillSelf();
+                break;
+            }
+            case SPELL_COMMUNIQUE_RELAY_TO_CAMP:
+            {
+                me->CastSpell(nullptr, SPELL_CAMP_RECEIVES_COMMUNIQUE, true);
+                break;
+            }
+            case SPELL_CHOOSE_CAMP_TYPE:
+            {
+                _spellCampType = RAND(SPELL_CAMP_TYPE_GHOUL_SKELETON, SPELL_CAMP_TYPE_GHOST_GHOUL, SPELL_CAMP_TYPE_GHOST_SKELETON);
+                DoCastSelf(_spellCampType, true);
+                break;
+            }
+            case SPELL_CAMP_RECEIVES_COMMUNIQUE:
+            {
+                if (!HasCampTypeAura() && me->GetEntry() == NPC_NECROTIC_SHARD)
+                {
+                    UpdateFindersAmount();
+                    DoCastSelf(SPELL_CHOOSE_CAMP_TYPE, true);
+                    ScheduleMinionSpawnTask();
+                }
+                break;
+            }
+            case SPELL_FIND_CAMP_TYPE:
+            {
+                // Don't spawn more minions than finders.
+                if (_nearbyFinderCount < CountMinions(me, 60.0f))
+                    return;
+
+                Unit* unitCaster = caster ? caster->ToUnit() : nullptr;
+                if (!unitCaster)
+                    return;
+
+                static constexpr std::pair<uint32, uint32> auraSpellMap[] =
+                {
+                    { SPELL_CAMP_TYPE_GHOST_SKELETON, SPELL_PH_SUMMON_MINION_TRAP_GHOST_SKELETON },
+                    { SPELL_CAMP_TYPE_GHOST_GHOUL,    SPELL_PH_SUMMON_MINION_TRAP_GHOST_GHOUL    },
+                    { SPELL_CAMP_TYPE_GHOUL_SKELETON, SPELL_PH_SUMMON_MINION_TRAP_GHOUL_SKELETON }
+                };
+
+                for (auto const& [aura, trapSpell] : auraSpellMap)
+                    if (me->HasAura(aura))
+                    {
+                        unitCaster->CastSpell(unitCaster, trapSpell, true);
+                        break;
+                    }
+                break;
+            }
+            default:
+                break;
         }
     }
 
-    void HandleCultistSpawner()
+    void SpellHitTarget(WorldObject* /*target*/, SpellInfo const* spellInfo) override
     {
-        // Despawn old shadows first
-        std::list<Creature*> shadows;
-        me->GetCreatureListWithEntryInGrid(shadows, NPC_SHADOW_OF_DOOM, 50.0f);
-        for (Creature* s : shadows)
-            s->DespawnOrUnsummon();
-
-        // Spawn cultist
-        me->SummonCreature(NPC_CULTIST_ENGINEER, me->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 1h);
-    }
-
-    void CheckForDamage()
-    {
-        if (me->GetEntry() != NPC_NECROTIC_SHARD)
+        if (me->GetEntry() != NPC_DAMAGED_NECROTIC_SHARD)
             return;
 
-        // Find if there's a damaged shard nearby
-        if (Creature* damaged = me->FindNearestCreature(NPC_DAMAGED_NECROTIC_SHARD, 15.0f))
-            if (!damaged->IsAlive())
-                damaged->Respawn();
+        // Death bolt delivered: remove the destroyed shard.
+        if (spellInfo->Id == SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH)
+            me->DespawnOrUnsummon();
     }
 
-    void JustSummoned(Creature* summon) override
+    // Only same-faction sources (minion deaths, Shadow of Doom zaps, self) may damage the shard.
+    void DamageTaken(Unit* attacker, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
     {
-        summon->CastSpell(summon, SPELL_MINION_SPAWN_IN, true);
-    }
-
-    void DamageTaken(Unit* /*attacker*/, uint32& damage, DamageEffectType /*damageType*/, SpellInfo const* /*spellInfo*/) override
-    {
-        if (me->GetEntry() == NPC_NECROTIC_SHARD)
-        {
-            _zapCount++;
-            if (_zapCount >= 4)
-            {
-                // Transform to damaged shard
-                me->UpdateEntry(NPC_DAMAGED_NECROTIC_SHARD);
-                me->SetFullHealth();
-                _zapCount = 0;
-                damage = 0;
-            }
-        }
+        if (attacker && attacker->GetFactionTemplateEntry() != me->GetFactionTemplateEntry())
+            damage = 0;
     }
 
     void JustDied(Unit* /*killer*/) override
     {
-        // Each shard death counts toward necropolis destruction
-        uint32 zoneId = me->GetZoneId();
-        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
-        if (def)
-            sScourgeInvasionMgr->HandleZoneNecropolisDestroyed(zoneId);
-        me->DespawnOrUnsummon(10s);
+        switch (me->GetEntry())
+        {
+            case NPC_NECROTIC_SHARD:
+                // Shard destroyed: turns into a Damaged Necrotic Shard with the same camp type.
+                if (Creature* shard = me->SummonCreature(NPC_DAMAGED_NECROTIC_SHARD, me->GetPosition(), TEMPSUMMON_MANUAL_DESPAWN))
+                {
+                    shard->CastSpell(shard, _spellCampType ? _spellCampType : uint32(SPELL_CHOOSE_CAMP_TYPE), true);
+                    me->DespawnOrUnsummon();
+                }
+                break;
+            case NPC_DAMAGED_NECROTIC_SHARD:
+                DoCastSelf(SPELL_SOUL_REVIVAL, true); // zone-wide player buff
+                // Send the death bolt through the communication chain.
+                if (Creature* relay = GetClosestCreatureWithEntry(me, NPC_NECROPOLIS_RELAY, 200.0f))
+                    me->CastSpell(relay, SPELL_COMMUNIQUE_CAMP_TO_RELAY_DEATH, true);
+                DespawnCultists();
+                DespawnEventDoodads();
+                break;
+            default:
+                break;
+        }
+    }
+
+    // Placeholder for SPELL_MINION_SPAWNER_SMALL [27887]: pick idle finders and let them
+    // request a minion spawner matching the camp type.
+    void HandleShardMinionSpawnerSmall()
+    {
+        uint32 spawnLimit = urand(1, 3);
+        uint32 spawned = 0;
+
+        std::list<Creature*> finderList;
+        me->GetCreatureListWithEntryInGrid(finderList, NPC_SCOURGE_INVASION_MINION_FINDER, 60.0f);
+        if (finderList.empty())
+            return;
+
+        // On a fresh camp minions spawn close to the shard first, then further out.
+        finderList.sort(Trinity::ObjectDistanceOrderPred(me));
+
+        for (Creature* finder : finderList)
+        {
+            if (spawned == spawnLimit)
+                break;
+
+            if (!finder->IsAlive())
+                continue;
+
+            // Don't take finders that already have minions.
+            if (CountMinions(finder, ATTACK_DISTANCE))
+                continue;
+
+            // A finder despawns after summoning the spawner NPC and respawns 150-200s later.
+            if (finder->CastSpell(me, SPELL_FIND_CAMP_TYPE, true) == SPELL_CAST_OK)
+            {
+                finder->DespawnOrUnsummon(0ms, Seconds(urand(150, 200)));
+                ++spawned;
+            }
+        }
+    }
+
+    void SummonCultists()
+    {
+        std::list<GameObject*> shieldList;
+        me->GetGameObjectListWithEntryInGrid(shieldList, GO_SUMMONER_SHIELD, INSPECT_DISTANCE);
+        for (GameObject* shield : shieldList)
+            shield->DespawnOrUnsummon();
+
+        if (GameObject* circle = GetClosestGameObjectWithEntry(me, GO_SUMMON_CIRCLE, CONTACT_DISTANCE))
+        {
+            for (int i = 0; i < 4; ++i)
+            {
+                float angle = (float(i) * float(M_PI / 2)) + circle->GetOrientation();
+                float x = circle->GetPositionX() + 6.95f * std::cos(angle);
+                float y = circle->GetPositionY() + 6.75f * std::sin(angle);
+                float z = circle->GetPositionZ() + 5.0f;
+                me->UpdateGroundPositionZ(x, y, z);
+                me->SummonCreature(NPC_CULTIST_ENGINEER, x, y, z, angle - float(M_PI), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Hours(1));
+            }
+        }
+    }
+
+    static uint32 CountMinions(WorldObject* searcher, float range)
+    {
+        uint32 const entries[] = { NPC_SKELETAL_SHOCKTROOPER, NPC_GHOUL_BERSERKER, NPC_SPECTRAL_SOLDIER, NPC_LUMBERING_HORROR, NPC_BONE_WITCH, NPC_SPIRIT_OF_THE_DAMNED };
+        uint32 count = 0;
+        for (uint32 entry : entries)
+        {
+            std::list<Creature*> minionList;
+            searcher->GetCreatureListWithEntryInGrid(minionList, entry, range);
+            for (Creature const* minion : minionList)
+                if (minion && minion->IsAlive())
+                    ++count;
+        }
+        return count;
+    }
+
+    void UpdateFindersAmount()
+    {
+        std::list<Creature*> finderList;
+        me->GetCreatureListWithEntryInGrid(finderList, NPC_SCOURGE_INVASION_MINION_FINDER, 60.0f);
+        _nearbyFinderCount = uint32(finderList.size());
+    }
+
+    void DespawnCultists()
+    {
+        std::list<Creature*> cultistList;
+        me->GetCreatureListWithEntryInGrid(cultistList, NPC_CULTIST_ENGINEER, INSPECT_DISTANCE);
+        for (Creature* cultist : cultistList)
+            if (cultist)
+                cultist->DespawnOrUnsummon();
+    }
+
+    void DespawnShadowsOfDoom()
+    {
+        std::list<Creature*> shadowList;
+        me->GetCreatureListWithEntryInGrid(shadowList, NPC_SHADOW_OF_DOOM, 200.0f);
+        for (Creature* shadow : shadowList)
+            if (shadow && shadow->IsAlive() && !shadow->IsInCombat())
+                shadow->DespawnOrUnsummon();
+    }
+
+    // Remove camp objects around the shard (yes, this is blizzlike).
+    void DespawnEventDoodads()
+    {
+        uint32 const doodads[] = { GO_SUMMON_CIRCLE, GO_UNDEAD_FIRE, GO_UNDEAD_FIRE_AURA, GO_SKULLPILE_01, GO_SKULLPILE_02, GO_SKULLPILE_03, GO_SKULLPILE_04, GO_SUMMONER_SHIELD };
+        for (uint32 entry : doodads)
+        {
+            std::list<GameObject*> goList;
+            me->GetGameObjectListWithEntryInGrid(goList, entry, 60.0f);
+            for (GameObject* go : goList)
+                go->DespawnOrUnsummon(0ms, Seconds(DAY));
+        }
+
+        std::list<Creature*> finderList;
+        me->GetCreatureListWithEntryInGrid(finderList, NPC_SCOURGE_INVASION_MINION_FINDER, 60.0f);
+        for (Creature* finder : finderList)
+            finder->DespawnOrUnsummon(0ms, Seconds(DAY));
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        _scheduler.Update(diff);
     }
 
 private:
-    EventMap _events;
-    uint8 _zapCount = 0;
+    TaskScheduler _scheduler;
+    uint32 _spellCampType = 0;
+    uint32 _nearbyFinderCount = 0;
+    uint8 _zapCount = 0; // 4 = death
+    bool _minionTaskScheduled = false;
 };
 
-// ===== NPC: Minion Spawner =====
+// ===== NPC: Minion Spawner (16306/16336/16338) =====
 
 struct npc_minion_spawner : public ScriptedAI
 {
@@ -988,64 +1364,144 @@ struct npc_minion_spawner : public ScriptedAI
         me->SetReactState(REACT_PASSIVE);
     }
 
+    void JustSummoned(Creature* summon) override
+    {
+        summon->SetWanderDistance(1.0f);
+        DoCastAOE(SPELL_MINION_SPAWN_IN);
+    }
+
     void Reset() override
     {
-        _events.ScheduleEvent(EVENT_SPAWNER_SUMMON_MINION, 5s);
+        // A spawner spawns exactly one minion 5 seconds after being created, then despawns.
+        _scheduler.Schedule(Seconds(5), [this](TaskContext /*context*/)
+        {
+            uint32 entry;
+            switch (me->GetEntry())
+            {
+                case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOST_GHOUL:
+                    entry = CanSpawnRareMinion() ? RAND(NPC_SPIRIT_OF_THE_DAMNED, NPC_LUMBERING_HORROR)
+                                                 : RAND(NPC_SPECTRAL_SOLDIER, NPC_GHOUL_BERSERKER);
+                    break;
+                case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOST_SKELETON:
+                    entry = CanSpawnRareMinion() ? RAND(NPC_SPIRIT_OF_THE_DAMNED, NPC_BONE_WITCH)
+                                                 : RAND(NPC_SPECTRAL_SOLDIER, NPC_SKELETAL_SHOCKTROOPER);
+                    break;
+                case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOUL_SKELETON:
+                    entry = CanSpawnRareMinion() ? RAND(NPC_LUMBERING_HORROR, NPC_BONE_WITCH)
+                                                 : RAND(NPC_GHOUL_BERSERKER, NPC_SKELETAL_SHOCKTROOPER);
+                    break;
+                default:
+                    entry = NPC_GHOUL_BERSERKER;
+                    break;
+            }
+
+            me->SummonCreature(entry, me->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Hours(1));
+            me->DespawnOrUnsummon(Seconds(1));
+        });
+    }
+
+    bool CanSpawnRareMinion()
+    {
+        uint32 const rares[] = { NPC_LUMBERING_HORROR, NPC_BONE_WITCH, NPC_SPIRIT_OF_THE_DAMNED };
+        for (uint32 entry : rares)
+        {
+            std::list<Creature*> rareList;
+            me->GetCreatureListWithEntryInGrid(rareList, entry, 100.0f);
+            if (!rareList.empty())
+                return false; // already a rare nearby (dead or alive)
+        }
+
+        // Sniffed ratio: 19669 minions to 90 rares (~217:1).
+        return urand(1, 217) == 1;
     }
 
     void UpdateAI(uint32 diff) override
     {
-        _events.Update(diff);
-
-        while (uint32 eventId = _events.ExecuteEvent())
-        {
-            if (eventId == EVENT_SPAWNER_SUMMON_MINION)
-            {
-                uint32 entry;
-                switch (me->GetEntry())
-                {
-                    case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOST_GHOUL:
-                        entry = CanSpawnRare() ? RAND(NPC_SPIRIT_OF_THE_DAMNED, NPC_LUMBERING_HORROR)
-                            : RAND(NPC_SPECTRAL_SOLDIER, NPC_GHOUL_BERSERKER);
-                        break;
-                    case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOST_SKELETON:
-                        entry = CanSpawnRare() ? RAND(NPC_SPIRIT_OF_THE_DAMNED, NPC_BONE_WITCH)
-                            : RAND(NPC_SPECTRAL_SOLDIER, NPC_SKELETAL_SHOCKTROOPER);
-                        break;
-                    case NPC_SCOURGE_INVASION_MINION_SPAWNER_GHOUL_SKELETON:
-                        entry = CanSpawnRare() ? RAND(NPC_LUMBERING_HORROR, NPC_BONE_WITCH)
-                            : RAND(NPC_GHOUL_BERSERKER, NPC_SKELETAL_SHOCKTROOPER);
-                        break;
-                    default:
-                        entry = NPC_GHOUL_BERSERKER;
-                        break;
-                }
-
-                if (Creature* minion = me->SummonCreature(entry, me->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 1h))
-                {
-                    minion->SetWanderDistance(1.0f);
-                    DoCastAOE(SPELL_MINION_SPAWN_IN);
-                }
-
-                _events.Repeat(5s);
-            }
-        }
-    }
-
-    bool CanSpawnRare()
-    {
-        std::list<Creature*> rares;
-        me->GetCreatureListWithEntryInGrid(rares, NPC_LUMBERING_HORROR, 100.0f);
-        me->GetCreatureListWithEntryInGrid(rares, NPC_BONE_WITCH, 100.0f);
-        me->GetCreatureListWithEntryInGrid(rares, NPC_SPIRIT_OF_THE_DAMNED, 100.0f);
-        for (Creature* r : rares)
-            if (r->IsAlive())
-                return false;
-
-        return roll_chance_i(1);
+        _scheduler.Update(diff);
     }
 
 private:
+    TaskScheduler _scheduler;
+};
+
+// ===== NPC: Shadow of Doom (summoned by Cultist Engineer) =====
+
+struct npc_shadow_of_doom : public ScriptedAI
+{
+    npc_shadow_of_doom(Creature* creature) : ScriptedAI(creature) { }
+
+    void IsSummonedBy(WorldObject* /*summoner*/) override
+    {
+        me->SetUnitFlag(UNIT_FLAG_IMMUNE_TO_PC);
+        DoCastSelf(SPELL_SPAWN_SMOKE, true);
+
+        _scheduler.Schedule(Seconds(0), [this](TaskContext context)
+        {
+            Talk(0);
+            context.Schedule(Seconds(8), [this](TaskContext /*ctx*/)
+            {
+                me->RemoveUnitFlag(UNIT_FLAG_IMMUNE_TO_PC);
+            });
+        });
+
+        _events.ScheduleEvent(EVENT_DOOM_MINDFLAY, 2s);
+        _events.ScheduleEvent(EVENT_DOOM_FEAR, 14s);
+    }
+
+    void Reset() override
+    {
+        _scheduler.CancelAll();
+        _events.Reset();
+    }
+
+    void SpellHit(WorldObject* /*caster*/, SpellInfo const* spell) override
+    {
+        if (spell->Id == SPELL_SPIRIT_SPAWN_OUT)
+            me->DespawnOrUnsummon(Seconds(3));
+    }
+
+    void JustDied(Unit* /*killer*/) override
+    {
+        DoCastSelf(SPELL_ZAP_CRYSTAL_CORPSE, true);
+    }
+
+    void UpdateAI(uint32 diff) override
+    {
+        _scheduler.Update(diff);
+
+        if (!UpdateVictim())
+            return;
+
+        _events.Update(diff);
+        while (uint32 eventId = _events.ExecuteEvent())
+        {
+            switch (eventId)
+            {
+                case EVENT_DOOM_MINDFLAY:
+                    DoCastVictim(SPELL_DOOM_MINDFLAY);
+                    _events.Repeat(2s, 6500ms);
+                    break;
+                case EVENT_DOOM_FEAR:
+                    DoCastVictim(SPELL_DOOM_FEAR);
+                    _events.Repeat(14500ms);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        DoMeleeAttackIfReady();
+    }
+
+private:
+    enum ShadowOfDoomSpells
+    {
+        SPELL_SPAWN_SMOKE     = 10389,
+        SPELL_DOOM_MINDFLAY   = 16568,
+        SPELL_DOOM_FEAR       = 12542,
+    };
+
+    TaskScheduler _scheduler;
     EventMap _events;
 };
 
@@ -1057,77 +1513,61 @@ struct npc_cultist_engineer : public ScriptedAI
 
     void Reset() override
     {
-        _events.Reset();
+        _scheduler.CancelAll();
         me->SetReactState(REACT_PASSIVE);
-        me->SetCorpseDelay(10);
-        _events.ScheduleEvent(1, 1ms);
-        _events.ScheduleEvent(2, 1s);
-    }
+        me->SetCorpseDelay(10); // corpse despawns 10 seconds after a Shadow of Doom spawns
 
-    void UpdateAI(uint32 diff) override
-    {
-        _events.Update(diff);
-
-        while (uint32 eventId = _events.ExecuteEvent())
+        _scheduler.Schedule(Milliseconds(100), [this](TaskContext /*context*/)
         {
-            switch (eventId)
-            {
-                case 1:
-                    DoCastSelf(SPELL_CREATE_SUMMONER_SHIELD, true);
-                    DoCastSelf(SPELL_MINION_SPAWN_IN, true);
-                    break;
-                case 2:
-                    DoCastSelf(SPELL_BUTTRESS_CHANNEL, true);
-                    break;
-            }
-        }
+            DoCastSelf(SPELL_CREATE_SUMMONER_SHIELD, true);
+            DoCastSelf(SPELL_MINION_SPAWN_IN, true);
+        });
+        _scheduler.Schedule(Seconds(1), [this](TaskContext /*context*/)
+        {
+            DoCastSelf(SPELL_BUTTRESS_CHANNEL, true);
+        });
     }
 
     bool OnGossipHello(Player* player) override
     {
         if (player->HasItemCount(ITEM_NECROTIC_RUNE, 8))
-        {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "召唤首领（消耗 8 个死亡符文）", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
-        }
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "召唤末日阴影（消耗 8 个死灵符文）", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 1);
         else
-        {
-            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "我需要 8 个死亡符文才能召唤首领", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2);
-            SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
-        }
+            AddGossipItemFor(player, GOSSIP_ICON_CHAT, "我需要 8 个死灵符文才能召唤首领。", GOSSIP_SENDER_MAIN, GOSSIP_ACTION_INFO_DEF + 2);
+        SendGossipMenuFor(player, DEFAULT_GOSSIP_MESSAGE, me->GetGUID());
         return true;
     }
 
     bool OnGossipSelect(Player* player, uint32 /*menuId*/, uint32 gossipListId) override
     {
         uint32 const action = player->PlayerTalkClass->GetGossipOptionAction(gossipListId);
-        ClearGossipMenuFor(player);
+        CloseGossipMenuFor(player);
 
-        if (action == GOSSIP_ACTION_INFO_DEF + 1)
+        if (action == GOSSIP_ACTION_INFO_DEF + 1 && player->HasItemCount(ITEM_NECROTIC_RUNE, 8))
         {
-            CloseGossipMenuFor(player);
             player->DestroyItemCount(ITEM_NECROTIC_RUNE, 8, true);
-            player->CastSpell(nullptr, SPELL_SUMMON_BOSS, true);
+            player->CastSpell(nullptr, SPELL_SUMMON_BOSS, true); // summons a Shadow of Doom for 1 hour
             DoCastSelf(SPELL_QUIET_SUICIDE, true);
-        }
-        else
-        {
-            CloseGossipMenuFor(player);
         }
         return true;
     }
 
     void JustDied(Unit* /*killer*/) override
     {
-        _events.Reset();
-        if (Creature* shard = me->FindNearestCreature(NPC_DAMAGED_NECROTIC_SHARD, 15.0f))
+        _scheduler.CancelAll();
+        if (Creature* shard = GetClosestCreatureWithEntry(me, NPC_DAMAGED_NECROTIC_SHARD, 15.0f))
             shard->CastSpell(shard, SPELL_DAMAGE_CRYSTAL, true);
-        if (GameObject* shield = me->FindNearestGameObject(GO_SUMMONER_SHIELD, 5.0f))
+        if (GameObject* shield = GetClosestGameObjectWithEntry(me, GO_SUMMONER_SHIELD, CONTACT_DISTANCE))
             shield->Delete();
     }
 
+    void UpdateAI(uint32 diff) override
+    {
+        _scheduler.Update(diff);
+    }
+
 private:
-    EventMap _events;
+    TaskScheduler _scheduler;
 };
 
 // ===== NPC: Flameshocker =====
@@ -1138,6 +1578,7 @@ struct npc_flameshocker : public ScriptedAI
 
     void Reset() override
     {
+        _scheduler.CancelAll();
         _scheduler.Schedule(Seconds(2), [this](TaskContext context)
         {
             if (Unit* victim = me->GetVictim())
@@ -1163,7 +1604,7 @@ private:
     TaskScheduler _scheduler;
 };
 
-// ===== NPC: Pallid Horror =====
+// ===== NPC: Pallid Horror (city attacks) =====
 
 struct npc_pallid_horror : public ScriptedAI
 {
@@ -1172,15 +1613,28 @@ struct npc_pallid_horror : public ScriptedAI
     void InitializeAI() override
     {
         _summons.DespawnAll();
-        me->SetCorpseDelay(10);
+        me->SetCorpseDelay(10); // corpse despawns 10 seconds after the crystal spawns
         UpdateWeather(true);
         me->AddAura(SPELL_AURA_OF_FEAR, me);
         me->SetWalk(false);
-        _scheduler.Schedule(Seconds(0), [this](TaskContext /*context*/) { SummonFlameshockers(); });
+        ScheduleTasks();
+    }
+
+    void ScheduleTasks()
+    {
+        _scheduler.Schedule(Seconds(0), [this](TaskContext /*context*/)
+        {
+            SummonFlameshockers();
+        });
         _scheduler.Schedule(Seconds(1), [this](TaskContext context)
         {
             Talk(PALLID_HORROR_SAY_RANDOM_YELL);
             context.Repeat(Seconds(65), Seconds(300));
+        });
+        _scheduler.Schedule(Seconds(11), Seconds(81), [this](TaskContext context)
+        {
+            DoCastVictim(SPELL_DAMAGE_VS_GUARDS, true);
+            context.Repeat(Seconds(11), Seconds(81));
         });
         _scheduler.Schedule(Seconds(2), [this](TaskContext context)
         {
@@ -1189,18 +1643,34 @@ struct npc_pallid_horror : public ScriptedAI
                 context.Repeat(Seconds(10));
                 return;
             }
-            context.Repeat(Seconds(1));
+
+            // Spawn a Flameshocker next to a random nearby defender.
+            std::list<Creature*> targets;
+            FlameshockerSpawnTargetCheck check;
+            Trinity::CreatureListSearcher<FlameshockerSpawnTargetCheck> searcher(me, targets, check);
+            Cell::VisitGridObjects(me, searcher, 90.0f);
+
+            if (!targets.empty())
+            {
+                Creature* target = Trinity::Containers::SelectRandomContainerElement(targets);
+                float x, y, z;
+                target->GetNearPoint(target, x, y, z, 5.0f, 0.0f);
+                if (Creature* summon = me->SummonCreature(NPC_FLAMESHOCKER, x, y, z, target->GetOrientation(), TEMPSUMMON_TIMED_DESPAWN_OUT_OF_COMBAT, Seconds(5)))
+                    _summons.Summon(summon);
+            }
+            context.Repeat(Seconds(2));
         });
     }
 
     void SummonFlameshockers()
     {
-        uint32 amount = urand(5, 9);
+        uint32 const amount = urand(5, 9); // sniffed group sizes of 5-9 shockers on spawn
         for (uint32 i = 0; i < amount; ++i)
         {
-            if (Creature* summon = me->SummonCreature(NPC_FLAMESHOCKER, me->GetPosition(), TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, 1h))
+            if (Creature* summon = me->SummonCreature(NPC_FLAMESHOCKER, me->GetPosition(), TEMPSUMMON_TIMED_OR_CORPSE_DESPAWN, Hours(1)))
             {
-                float angle = float(i) * (M_PI / (float(amount) / 2.f)) + me->GetOrientation();
+                float angle = float(i) * (float(M_PI) / (float(amount) / 2.f)) + me->GetOrientation();
+                summon->GetMotionMaster()->Clear();
                 summon->GetMotionMaster()->MoveFollow(me, 2.5f, angle);
                 _summons.Summon(summon);
             }
@@ -1215,18 +1685,18 @@ struct npc_pallid_horror : public ScriptedAI
 
     void JustDied(Unit* /*killer*/) override
     {
-        if (Creature* sylvanas = me->FindNearestCreature(NPC_LADY_SYLVANAS_WINDRUNNER, VISIBILITY_DISTANCE_NORMAL))
+        if (Creature* sylvanas = GetClosestCreatureWithEntry(me, NPC_LADY_SYLVANAS_WINDRUNNER, VISIBILITY_DISTANCE_NORMAL))
             sylvanas->AI()->Talk(SYLVANAS_SAY_ATTACK_END);
 
-        _summons.DespawnAll();
+        // Kill remaining flameshockers.
+        for (ObjectGuid guid : _summons)
+            if (Creature* summon = ObjectAccessor::GetCreature(*me, guid))
+                summon->KillSelf();
 
+        // Spawn the quest crystal.
         DoCastSelf(me->GetZoneId() == AREA_UNDERCITY ? SPELL_SUMMON_FAINT_NECROTIC_CRYSTAL : SPELL_SUMMON_CRACKED_NECROTIC_CRYSTAL, true);
 
-        // Reset city attack timer
-        for (auto const& def : g_pallidDefs)
-            if (def.zoneId == me->GetZoneId())
-                sScourgeInvasionMgr->SetSITimer(def.timerIdx, std::chrono::steady_clock::now() + std::chrono::seconds(urand(CITY_ATTACK_TIMER_MIN, CITY_ATTACK_TIMER_MAX)));
-
+        sScourgeInvasionMgr->OnPallidDeath(me->GetZoneId());
         UpdateWeather(false);
     }
 
@@ -1245,23 +1715,26 @@ struct npc_pallid_horror : public ScriptedAI
 
     void UpdateWeather(bool start)
     {
-        Weather* weather = me->GetMap()->GetOrGenerateZoneDefaultWeather(me->GetZoneId());
-        if (weather)
-        {
-            if (start)
-                weather->SetWeather(WEATHER_TYPE_STORM, 0.25f);
-            else
-                weather->SetWeather(WEATHER_TYPE_RAIN, 0.0f);
-        }
+        if (Weather* weather = me->GetMap()->GetOrGenerateZoneDefaultWeather(me->GetZoneId()))
+            weather->SetWeather(start ? WEATHER_TYPE_STORM : WEATHER_TYPE_RAIN, start ? 0.25f : 0.0f);
     }
 
 private:
+    struct FlameshockerSpawnTargetCheck
+    {
+        bool operator()(Creature* creature) const
+        {
+            return creature->IsAlive() && !creature->IsCivilian() && creature->GetEntry() != NPC_FLAMESHOCKER;
+        }
+    };
+
     TaskScheduler _scheduler;
     SummonList _summons;
 };
 
 // ===== Spell Scripts =====
 
+// 28091 - Despawner, self (server-side)
 class spell_despawner_self : public SpellScript
 {
     PrepareSpellScript(spell_despawner_self);
@@ -1284,6 +1757,7 @@ class spell_despawner_self : public SpellScript
     }
 };
 
+// 28345 - Communique Trigger (server-side)
 class spell_communique_trigger : public SpellScript
 {
     PrepareSpellScript(spell_communique_trigger);
@@ -1295,8 +1769,12 @@ class spell_communique_trigger : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        if (Unit* target = GetHitUnit())
-            target->CastSpell(nullptr, SPELL_COMMUNIQUE_CAMP_TO_RELAY, true);
+        Unit* target = GetHitUnit();
+        if (!target)
+            return;
+
+        if (Creature* relay = GetClosestCreatureWithEntry(target, NPC_NECROPOLIS_RELAY, 200.0f))
+            target->CastSpell(relay, SPELL_COMMUNIQUE_CAMP_TO_RELAY, true);
     }
 
     void Register() override
@@ -1305,6 +1783,26 @@ class spell_communique_trigger : public SpellScript
     }
 };
 
+// Filters communique/lightning spells so only SI chain participants can be hit.
+class spell_scourge_invasion_communique_filter : public SpellScript
+{
+    PrepareSpellScript(spell_scourge_invasion_communique_filter);
+
+    void PreventInvalidHit(SpellEffIndex effIndex)
+    {
+        if (WorldObject* target = GetHitUnit() ? static_cast<WorldObject*>(GetHitUnit()) : GetHitGObj())
+            if (!IsScourgeCommuniqueTarget(target, GetSpellInfo()->Id))
+                PreventHitDefaultEffect(effIndex);
+    }
+
+    void Register() override
+    {
+        // Safety net: communique bolts are area/chain visuals that must never damage bystanders.
+        OnEffectHitTarget += SpellEffectFn(spell_scourge_invasion_communique_filter::PreventInvalidHit, EFFECT_ALL, SPELL_EFFECT_ANY);
+    }
+};
+
+// 28265 - Scourge Strike
 class spell_scourge_invasion_scourge_strike : public SpellScript
 {
     PrepareSpellScript(spell_scourge_invasion_scourge_strike);
@@ -1323,38 +1821,11 @@ class spell_scourge_invasion_scourge_strike : public SpellScript
     }
 };
 
-// ===== SI Controller NPC (invisible, runs SI update logic) =====
-
-struct npc_si_controller : public ScriptedAI
-{
-    npc_si_controller(Creature* creature) : ScriptedAI(creature)
-    {
-        me->SetReactState(REACT_PASSIVE);
-        me->setActive(true);
-        me->SetDisplayId(11686); // invisible
-        me->SetUnitFlag(UnitFlags(UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_UNINTERACTIBLE));
-        _updateTimer = 10000; // Check every 10 seconds
-    }
-
-    void UpdateAI(uint32 diff) override
-    {
-        _updateTimer += diff;
-        if (_updateTimer >= 10000)
-        {
-            _updateTimer = 0;
-            sScourgeInvasionMgr->Update();
-        }
-    }
-
-private:
-    uint32 _updateTimer = 0;
-};
-
-// ===== WorldScript: Initialize on server startup =====
+// ===== WorldScript: drives the manager =====
 
 struct ScourgeInvasionWorldScript : public WorldScript
 {
-    ScourgeInvasionWorldScript() : WorldScript("ScourgeInvasionWorldScript"), _timer(0), _eventsStarted(false) { }
+    ScourgeInvasionWorldScript() : WorldScript("ScourgeInvasionWorldScript") { }
 
     void OnStartup() override
     {
@@ -1363,57 +1834,45 @@ struct ScourgeInvasionWorldScript : public WorldScript
 
     void OnUpdate(uint32 diff) override
     {
-        if (!_eventsStarted)
+        if (!_initialized)
         {
-            _timer += diff;
-            // Wait 30 seconds to ensure all maps and objects are fully initialized
-            if (_timer >= 30000)
+            _initTimer += diff;
+            // Wait 30 seconds to ensure all maps and objects are fully initialized.
+            if (_initTimer < 30000)
+                return;
+            _initialized = true;
+
+            // Auto-create the world channel.
+            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
+                channelMgr->CreateCustomChannel("世界");
+            if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
+                channelMgr->CreateCustomChannel("世界");
+
+            // Auto-join all currently online players to the world channel.
+            SessionMap const& sessions = sWorld->GetAllSessions();
+            for (auto const& sessionPair : sessions)
             {
-                _eventsStarted = true;
-
-                // Auto-create World channel
-                if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(ALLIANCE))
-                    channelMgr->CreateCustomChannel("世界");
-                if (ChannelMgr* channelMgr = ChannelMgr::ForTeam(HORDE))
-                    channelMgr->CreateCustomChannel("世界");
-
-                // Auto-join all currently online players to "世界" channel
-                SessionMap const& sessions = sWorld->GetAllSessions();
-                for (auto const& sessionPair : sessions)
-                {
-                    Player* player = sessionPair.second->GetPlayer();
-                    if (!player || !player->IsInWorld())
-                        continue;
-                    if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
-                        mgr->GetChannel(0, "世界", player);
-                }
-
-                if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
-                {
-                    TC_LOG_ERROR("scripts", "[Scourge] WorldScript 30s init done, calling StartEvents");
-                    sScourgeInvasionMgr->StartEvents();
-                }
+                Player* player = sessionPair.second->GetPlayer();
+                if (!player || !player->IsInWorld())
+                    continue;
+                if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
+                    mgr->GetChannel(0, "世界", player);
             }
+
+            if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
+                sScourgeInvasionMgr->StartScourgeInvasion();
             return;
         }
 
-        // After events started, drive the invasion manager ticker
-        // (no dependency on si_controller which may not spawn on empty maps)
-        _tickTimer += diff;
-        if (_tickTimer >= 10000)
-        {
-            _tickTimer = 0;
-            sScourgeInvasionMgr->Update();
-        }
+        sScourgeInvasionMgr->Update(diff);
     }
 
 private:
-    uint32 _timer;
-    uint32 _tickTimer = 0;
-    bool _eventsStarted;
+    uint32 _initTimer = 0;
+    bool _initialized = false;
 };
 
-// ===== PlayerScript: Auto-join "世界" channel on login =====
+// ===== PlayerScript: auto-join world channel on login =====
 
 class ScourgeInvasionPlayerScript : public PlayerScript
 {
@@ -1429,7 +1888,7 @@ public:
     }
 };
 
-// ===== Command: .si — Scourge Invasion status =====
+// ===== Command: .si =====
 
 class scourge_invasion_commandscript : public CommandScript
 {
@@ -1440,20 +1899,33 @@ public:
     {
         static ChatCommandTable siCommandTable =
         {
-            { "si", HandleSICommand, rbac::RBAC_PERM_COMMAND_EVENT_INFO, Console::Yes },
+            { "",        HandleSIStatusCommand,  rbac::RBAC_PERM_COMMAND_EVENT_INFO,  Console::Yes },
+            { "enable",  HandleSIEnableCommand,  rbac::RBAC_PERM_COMMAND_EVENT_START, Console::Yes },
+            { "disable", HandleSIDisableCommand, rbac::RBAC_PERM_COMMAND_EVENT_START, Console::Yes },
         };
-        return siCommandTable;
+        static ChatCommandTable commandTable =
+        {
+            { "si", siCommandTable },
+        };
+        return commandTable;
     }
 
     static std::string FormatRemaining(uint32 secs)
     {
-        if (secs == 0) return "即将开始";
-        uint32 mins = secs / 60;
-        uint32 sec = secs % 60;
-        return fmt::format("{}分{}秒", mins, sec);
+        if (secs == 0)
+            return "即将开始";
+        return fmt::format("{}分{}秒", secs / 60, secs % 60);
     }
 
-    static bool HandleSICommand(ChatHandler* handler)
+    static uint32 SecondsUntil(TimePoint tp)
+    {
+        if (tp == TimePoint())
+            return 0;
+        int64 secs = std::chrono::duration_cast<std::chrono::seconds>(tp - std::chrono::steady_clock::now()).count();
+        return secs > 0 ? uint32(secs) : 0;
+    }
+
+    static bool HandleSIStatusCommand(ChatHandler* handler)
     {
         handler->SendSysMessage("===== 天灾入侵状态 =====");
 
@@ -1462,66 +1934,53 @@ public:
         handler->PSendSysMessage("已击败入侵: %u 次", sScourgeInvasionMgr->GetBattlesWon());
 
         handler->SendSysMessage("--- 区域入侵 ---");
-        auto now = std::chrono::steady_clock::now();
-        for (auto const& def : g_invasionZoneDefs)
+        for (InvasionZoneDef const& def : g_invasionZoneDefs)
         {
-            uint32 remaining = sScourgeInvasionMgr->GetSIRemaining(def.remainingIdx);
-            // Map zoneId to display name
             std::string_view name;
             switch (def.zoneId)
             {
-                case 618: name = "冬泉谷"; break;
-                case 440: name = "塔纳利斯"; break;
-                case 16:  name = "艾萨拉"; break;
-                case 4:   name = "诅咒之地"; break;
-                case 139: name = "东瘟疫之地"; break;
-                case 46:  name = "燃烧平原"; break;
-                default:  name = "未知"; break;
+                case AREA_WINTERSPRING:        name = "冬泉谷"; break;
+                case AREA_TANARIS:             name = "塔纳利斯"; break;
+                case AREA_AZSHARA:             name = "艾萨拉"; break;
+                case AREA_BLASTED_LANDS:       name = "诅咒之地"; break;
+                case AREA_EASTERN_PLAGUELANDS: name = "东瘟疫之地"; break;
+                case AREA_BURNING_STEPPES:     name = "燃烧平原"; break;
+                default:                       name = "未知"; break;
             }
+
+            uint32 remaining = sScourgeInvasionMgr->GetSIRemaining(def.remainingIdx);
             if (remaining > 0)
-            {
                 handler->PSendSysMessage("%s: |cffff0000战斗中|r (剩余 %u 个浮空城)", std::string(name).c_str(), remaining);
-            }
             else
-            {
-                uint32 timerSecs = 0;
-                auto tp = sScourgeInvasionMgr->GetSITimer(def.timerIdx);
-                if (tp != TimePoint())
-                {
-                    auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - std::chrono::steady_clock::now()).count();
-                    if (secs > 0)
-                        timerSecs = static_cast<uint32>(secs);
-                }
-                handler->PSendSysMessage("%s: |cff00ff00待命中|r (下次 %s)", std::string(name).c_str(), FormatRemaining(timerSecs).c_str());
-            }
+                handler->PSendSysMessage("%s: |cff00ff00待命中|r (下次 %s)", std::string(name).c_str(),
+                    FormatRemaining(SecondsUntil(sScourgeInvasionMgr->GetSITimer(def.timerIdx))).c_str());
         }
 
         handler->SendSysMessage("--- 主城袭击 ---");
-        static std::pair<uint32, std::string_view> const cityNames[] =
+        for (CityAttackDef const& def : g_cityAttackDefs)
         {
-            { 1497, "幽暗城" },
-            { 1519, "暴风城" },
-        };
-
-        for (auto const& [zoneId, name] : cityNames)
-        {
-            uint32 timerSecs = 0;
-            SITimers timerIdx = (zoneId == AREA_UNDERCITY) ? SI_TIMER_UNDERCITY : SI_TIMER_STORMWIND;
-            auto tp = sScourgeInvasionMgr->GetSITimer(timerIdx);
-            if (tp != TimePoint())
-            {
-                auto secs = std::chrono::duration_cast<std::chrono::seconds>(tp - now).count();
-                if (secs > 0)
-                    timerSecs = static_cast<uint32>(secs);
-            }
-
-            ObjectGuid pallidGuid = sScourgeInvasionMgr->GetPallidGuid(zoneId);
-            if (!pallidGuid.IsEmpty())
+            std::string_view name = def.zoneId == AREA_UNDERCITY ? "幽暗城" : "暴风城";
+            if (!sScourgeInvasionMgr->GetPallidGuid(def.zoneId).IsEmpty())
                 handler->PSendSysMessage("%s: |cffff0000遭到袭击中|r", std::string(name).c_str());
             else
-                handler->PSendSysMessage("%s: |cff00ff00安全|r (下次 %s)", std::string(name).c_str(), FormatRemaining(timerSecs).c_str());
+                handler->PSendSysMessage("%s: |cff00ff00安全|r (下次 %s)", std::string(name).c_str(),
+                    FormatRemaining(SecondsUntil(sScourgeInvasionMgr->GetSITimer(def.timerIdx))).c_str());
         }
 
+        return true;
+    }
+
+    static bool HandleSIEnableCommand(ChatHandler* handler)
+    {
+        sScourgeInvasionMgr->SetState(SI_STATE_ENABLED);
+        handler->SendSysMessage("天灾入侵已启用。");
+        return true;
+    }
+
+    static bool HandleSIDisableCommand(ChatHandler* handler)
+    {
+        sScourgeInvasionMgr->SetState(SI_STATE_DISABLED);
+        handler->SendSysMessage("天灾入侵已禁用。");
         return true;
     }
 };
@@ -1539,11 +1998,12 @@ void AddSC_scourge_invasion()
     RegisterCreatureAI(npc_necropolis_relay);
     RegisterCreatureAI(npc_necrotic_shard);
     RegisterCreatureAI(npc_minion_spawner);
+    RegisterCreatureAI(npc_shadow_of_doom);
     RegisterCreatureAI(npc_cultist_engineer);
     RegisterCreatureAI(npc_flameshocker);
     RegisterCreatureAI(npc_pallid_horror);
-    RegisterCreatureAI(npc_si_controller);
     RegisterSpellScript(spell_communique_trigger);
     RegisterSpellScript(spell_despawner_self);
+    RegisterSpellScript(spell_scourge_invasion_communique_filter);
     RegisterSpellScript(spell_scourge_invasion_scourge_strike);
 }

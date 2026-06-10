@@ -312,6 +312,15 @@ enum SICityTimers
     CITY_ATTACK_TIMER_MAX   = 60 * 60,
 };
 
+// Pallid Horror city patrol paths (waypoint_data)
+enum SIPallidHorrorPaths
+{
+    PATH_STORMWIND_KEEP           = 163941,
+    PATH_STORMWIND_TRADE_DISTRICT = 163942,
+    PATH_UNDERCITY_TRADE_QUARTER  = 163943,
+    PATH_UNDERCITY_ROYAL_QUARTER  = 163944,
+};
+
 // World states
 enum ScourgeInvasionWorldStates
 {
