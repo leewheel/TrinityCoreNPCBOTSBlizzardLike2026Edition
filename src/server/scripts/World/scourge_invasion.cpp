@@ -44,6 +44,7 @@
 #include "WeatherMgr.h"
 #include "World.h"
 #include "WorldSession.h"
+#include "Log.h"
 
 using namespace Trinity::ChatCommands;
 
@@ -87,6 +88,31 @@ static InvasionZoneDef const g_invasionZoneDefs[] =
     { 0, AREA_EASTERN_PLAGUELANDS, 2, SI_REMAINING_EASTERN_PLAGUELANDS, SI_TIMER_EASTERN_PLAGUELANDS, 2014.55f, -4934.52f, 73.9846f },
     { 0, AREA_BURNING_STEPPES,    2, SI_REMAINING_BURNING_STEPPES,    SI_TIMER_BURNING_STEPPES,    -8229.53f, -1118.11f, 144.012f },
 };
+
+// Necropolis GO positions per zone (from game_event_gameobject)
+struct NecropolisGOPos { float x, y, z; uint32 goEntry; };
+static NecropolisGOPos const g_necropolisGOs[][3] = {
+    /* AREA_WINTERSPRING */   { {6646.69f, -3442.36f, 792.92f, 181223}, {7755.75f, -4030.91f, 786.50f, 181223}, {6184.28f, -4913.32f, 807.68f, 181373} },
+    /* AREA_TANARIS */        { {-7399.95f, -3733.06f, 61.05f, 181215}, {-8633.21f, -2499.82f, 114.02f, 181215}, {-8333.68f, -3966.4f, 77.85f, 181215} },
+    /* AREA_AZSHARA */        { {3544.98f, -5610.26f, 67.11f, 181154}, {3299.55f, -4301.3f, 177.81f, 181154}, {0,0,0,0} },
+    /* AREA_BLASTED_LANDS */  { {-11402.1f, -3316.55f, 111.19f, 181223}, {-11233.9f, -2841.77f, 185.60f, 181374}, {0,0,0,0} },
+    /* AREA_EASTERN_PLAGUELANDS */ { {1766.67f, -3033.34f, 132.80f, 181154}, {2101.69f, -4930.03f, 168.28f, 181154}, {0,0,0,0} },
+    /* AREA_BURNING_STEPPES */ { {-8232.78f, -1099.86f, 201.49f, 181154}, {-7733.71f, -2432.74f, 190.79f, 181154}, {0,0,0,0} },
+};
+
+// Map zoneId → index in g_necropolisGOs
+static int GetNecropolisGOIndex(uint32 zoneId)
+{
+    switch (zoneId) {
+        case AREA_WINTERSPRING: return 0;
+        case AREA_TANARIS: return 1;
+        case AREA_AZSHARA: return 2;
+        case AREA_BLASTED_LANDS: return 3;
+        case AREA_EASTERN_PLAGUELANDS: return 4;
+        case AREA_BURNING_STEPPES: return 5;
+        default: return -1;
+    }
+}
 
 struct PallidAttackDef
 {
@@ -316,62 +342,83 @@ public:
         if (!def)
             return;
 
-        // Reset remaining
+        TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} map={}", zoneId, def->map);
+
         _data.remaining[def->remainingIdx] = def->necropolisCount;
         _data.lastAttackZone = zoneId;
 
-        // Summon Mouth - use CreateBaseMap so map exists even without players
-        Map* map = sMapMgr->CreateBaseMap(def->map);
+        Map* map = sMapMgr->FindMap(def->map, 0);
         if (!map)
         {
+            TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} FAILED - no map!", zoneId);
             AddPendingInvasion(zoneId);
+            _data.remaining[def->remainingIdx] = 0;
             return;
         }
 
-        // Despawn old mouth
-        ObjectGuid oldMouth = GetMouthGuid(zoneId);
-        if (Creature* old = map->GetCreature(oldMouth))
-            old->DespawnOrUnsummon();
+        TC_LOG_ERROR("scripts", "[Scourge] StartNewInvasion zoneId={} got map, spawning all units...", zoneId);
 
-        // Summon new Herald
+        // 1. Summon Herald at mouth position
         Creature* mouth = map->SummonCreature(NPC_HERALD_OF_THE_LICH_KING,
             Position(def->mouthX, def->mouthY, def->mouthZ, 0.0f));
-        if (mouth)
+        if (!mouth)
         {
-            SetMouthGuid(zoneId, mouth->GetGUID());
-            mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
+            TC_LOG_ERROR("scripts", "[Scourge] FAILED to summon Herald!");
+            return;
         }
 
-        // Start game event
-        uint32 gameEventId = 0;
-        switch (zoneId)
-        {
-            case AREA_WINTERSPRING:        gameEventId = GAME_EVENT_SCOURGE_INVASION_WINTERSPRING; break;
-            case AREA_TANARIS:             gameEventId = GAME_EVENT_SCOURGE_INVASION_TANARIS; break;
-            case AREA_AZSHARA:             gameEventId = GAME_EVENT_SCOURGE_INVASION_AZSHARA; break;
-            case AREA_BLASTED_LANDS:       gameEventId = GAME_EVENT_SCOURGE_INVASION_BLASTED_LANDS; break;
-            case AREA_EASTERN_PLAGUELANDS: gameEventId = GAME_EVENT_SCOURGE_INVASION_EASTERN_PLAGUELANDS; break;
-            case AREA_BURNING_STEPPES:     gameEventId = GAME_EVENT_SCOURGE_INVASION_BURNING_STEPPES; break;
-        }
-        if (gameEventId && !sGameEventMgr->IsActiveEvent(gameEventId))
-            sGameEventMgr->StartEvent(gameEventId, true);
+        TC_LOG_ERROR("scripts", "[Scourge] Herald spawned GUID={}", mouth->GetGUID().ToString());
+        SetMouthGuid(zoneId, mouth->GetGUID());
+        mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
 
-        // Directly spawn ground troops near mouth to guarantee visible combat
+        // 2. Spawn 15 ground troops around Herald
         uint32 groundEntries[] = { 16422, 16423, 16141, 16298, 16299 };
+        uint32 gruntCount = 0;
         for (uint32 i = 0; i < 15; ++i)
         {
             float angle = float(i) * (2.0f * M_PI / 15.0f);
             float dist = 30.0f + urand(0, 30);
             float x = def->mouthX + std::cos(angle) * dist;
             float y = def->mouthY + std::sin(angle) * dist;
-            uint32 entry = groundEntries[urand(0, 4)];
-            if (Creature* grunt = map->SummonCreature(entry, Position(x, y, def->mouthZ, 0.0f)))
+            if (Creature* grunt = mouth->SummonCreature(groundEntries[urand(0, 4)],
+                Position(x, y, def->mouthZ, 0.0f)))
             {
-                // Make aggressive to anyone in zone
+                grunt->setActive(true);
                 grunt->SetReactState(REACT_AGGRESSIVE);
+                gruntCount++;
             }
         }
+        TC_LOG_ERROR("scripts", "[Scourge] Summoned {} ground troops", gruntCount);
 
+        // 3. Summon Necropolis GOs + Shards (NO game events — all code-direct)
+        int goIdx = GetNecropolisGOIndex(zoneId);
+        if (goIdx >= 0)
+        {
+            uint32 neckCount = def->necropolisCount;
+            for (uint32 n = 0; n < neckCount; ++n)
+            {
+                NecropolisGOPos const& pos = g_necropolisGOs[goIdx][n];
+                if (pos.goEntry == 0) continue;
+
+                // Summon visible Necropolis GO
+                mouth->SummonGameObject(pos.goEntry,
+                    Position(pos.x, pos.y, pos.z, 0.0f), QuaternionData(), 0s);
+                TC_LOG_ERROR("scripts", "[Scourge] Necropolis GO spawned entry={}", pos.goEntry);
+
+                // Summon Necrotic Shards near Necropolis
+                for (uint32 s = 0; s < 2; ++s)
+                {
+                    float sx = pos.x + std::cos(float(s) * M_PI) * 40.0f;
+                    float sy = pos.y + std::sin(float(s) * M_PI) * 40.0f;
+                    if (Creature* shard = mouth->SummonCreature(NPC_NECROTIC_SHARD,
+                        Position(sx, sy, pos.z, 0.0f)))
+                    {
+                        shard->setActive(true);
+                        TC_LOG_ERROR("scripts", "[Scourge] Shard spawned GUID={}", shard->GetGUID().ToString());
+                    }
+                }
+            }
+        }
 
         BroadcastWorldStates();
         SaveToDB();
@@ -484,7 +531,7 @@ public:
             uint32 zoneId = *it;
             InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
             if (def)
-                if (Map* map = sMapMgr->FindMap(def->map, 0))
+                if (sMapMgr->FindMap(def->map, 0))
                 {
                     it = _data.pendingInvasions.erase(it);
                     StartNewInvasion(zoneId);
@@ -499,12 +546,12 @@ public:
             uint32 zoneId = *it;
             for (auto const& def : g_pallidDefs)
                 if (def.zoneId == zoneId)
-                    if (Map* map = sMapMgr->FindMap(def.map, 0))
+                    if (sMapMgr->FindMap(def.map, 0))
                     {
                         it = _data.pendingPallids.erase(it);
                         StartNewCityAttack(zoneId);
                         continue;
-                    }
+                    } // closes if (def.zoneId == zoneId)
             ++it;
         }
     }
@@ -552,6 +599,8 @@ public:
 
     void StartEvents()
     {
+        TC_LOG_ERROR("scripts", "[Scourge] StartEvents called, state={}", uint32(_data.state));
+
         // Reset remaining to 0 so Update() will trigger new invasions
         for (auto const& def : g_invasionZoneDefs)
             _data.remaining[def.remainingIdx] = 0;
@@ -569,29 +618,14 @@ public:
                 _data.timers[def.timerIdx] = now + std::chrono::seconds(urand(120, 240));
         }
 
-        // Game event 17 must be started so that NPCs bound via game_event_creature spawn.
-        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
-        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
-            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES, true);
-
         SaveToDB();
         BroadcastWorldStates();
     }
 
     void StopEvents()
     {
-        if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
-            sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION, true);
-        if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES))
-            sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_BOSSES, true);
-
         for (auto const& def : g_invasionZoneDefs)
-        {
-            if (sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION_WINTERSPRING + (&def - g_invasionZoneDefs)))
-                sGameEventMgr->StopEvent(GAME_EVENT_SCOURGE_INVASION_WINTERSPRING + (&def - g_invasionZoneDefs), true);
             _data.remaining[def.remainingIdx] = 0;
-        }
         BroadcastWorldStates();
         SaveToDB();
     }
@@ -869,7 +903,21 @@ struct npc_necrotic_shard : public ScriptedAI
 
     void HandleMinionSpawner()
     {
-        DoCastSelf(SPELL_MINION_SPAWNER_SMALL, true);
+        // Directly spawn minions (no spell chain — skip MinionSpawner NPCs entirely)
+        uint32 entries[] = { 16141, 16298, 16299, 16422, 16423 };
+        uint32 entry = entries[urand(0, 4)];
+        if (Creature* minion = me->SummonCreature(entry, me->GetPosition(),
+            TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, 5min))
+        {
+            minion->setActive(true);
+            minion->SetReactState(REACT_AGGRESSIVE);
+            float angle = frand(0, 2 * M_PI);
+            float dist = frand(5, 20);
+            minion->GetMotionMaster()->MovePoint(0,
+                me->GetPositionX() + std::cos(angle) * dist,
+                me->GetPositionY() + std::sin(angle) * dist,
+                me->GetPositionZ());
+        }
     }
 
     void HandleCultistSpawner()
@@ -914,6 +962,16 @@ struct npc_necrotic_shard : public ScriptedAI
                 damage = 0;
             }
         }
+    }
+
+    void JustDied(Unit* /*killer*/) override
+    {
+        // Each shard death counts toward necropolis destruction
+        uint32 zoneId = me->GetZoneId();
+        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
+        if (def)
+            sScourgeInvasionMgr->HandleZoneNecropolisDestroyed(zoneId);
+        me->DespawnOrUnsummon(10s);
     }
 
 private:
@@ -1331,7 +1389,10 @@ struct ScourgeInvasionWorldScript : public WorldScript
                 }
 
                 if (sScourgeInvasionMgr->GetState() == SI_STATE_ENABLED)
+                {
+                    TC_LOG_ERROR("scripts", "[Scourge] WorldScript 30s init done, calling StartEvents");
                     sScourgeInvasionMgr->StartEvents();
+                }
             }
             return;
         }
