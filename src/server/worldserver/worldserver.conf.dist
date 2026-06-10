@@ -4197,7 +4197,9 @@ NpcBot.LogToDB = 0
 #    NpcBot.Chat.Enable.World
 #    NpcBot.Chat.Enable.Party
 #    NpcBot.Chat.Enable.Raid
-#        Description: Enable NPCBot autonomous channel chat.
+#        Description: Enable NPCBot autonomous channel chat (template fallback when LLM is off).
+#                     To disable ALL bot chat including party/raid, set NpcBot.Chat.Enable = 0.
+#                     NpcBot.Chat.LLM.Enable only controls AI model inference, not template chat.
 #        Default:     0 - (NpcBot.Chat.Enable)
 #                     1 - (World/Party/Raid switches)
 NpcBot.Chat.Enable = 0
@@ -4223,7 +4225,9 @@ NpcBot.Chat.WorldChannelName = "World"
 #    NpcBot.Chat.LLM.ModelName
 #    NpcBot.Chat.LLM.ModelPath
 #    NpcBot.Chat.LLM.Device
-#        Description: Embedded llama.cpp model selection.
+#        Description: Embedded llama.cpp model selection (AI-generated replies only).
+#                     When 0, no model is loaded and bots use built-in template lines instead.
+#                     Auto-detect (single .gguf in ClientData\\Ai.Mod) runs ONLY when Enable = 1.
 #                     Preferred: fill ModelName only, model is resolved from .\\ClientData\\Ai.Mod\\<ModelName>.
 #                     ModelPath is legacy fallback and still supported.
 #                     Device: gpu (default, offload to GPU — recommended for players) or cpu (dev only).

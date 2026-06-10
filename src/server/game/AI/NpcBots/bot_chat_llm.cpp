@@ -297,7 +297,24 @@ void Engine::Configure(bool enabled, std::string modelPath, bool useGpu)
 
 #ifdef TRINITY_NPCBOT_LLM_EMBED
     if (!_enabled || _modelPath.empty())
+    {
+        if (_runtime)
+        {
+            if (_runtime->context)
+            {
+                llama_free(_runtime->context);
+                _runtime->context = nullptr;
+            }
+            if (_runtime->model)
+            {
+                llama_free_model(_runtime->model);
+                _runtime->model = nullptr;
+            }
+            _runtime->loaded = false;
+            _runtime->loadedPath.clear();
+        }
         return;
+    }
 
     static bool backendInited = false;
     if (!backendInited)

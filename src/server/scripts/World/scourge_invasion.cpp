@@ -50,6 +50,7 @@
 #include <chrono>
 #include <map>
 #include <mutex>
+#include <set>
 
 using namespace Trinity::ChatCommands;
 
@@ -146,6 +147,32 @@ static Creature* GetClosestNecroticShard(WorldObject* source, float range)
     if (Creature* shard = GetClosestCreatureWithEntry(source, NPC_NECROTIC_SHARD, range))
         return shard;
     return GetClosestCreatureWithEntry(source, NPC_DAMAGED_NECROTIC_SHARD, range);
+}
+
+// TrinityCore requires explicit activation for off-grid AI; wander distance matches Acore (1.0f).
+static void ActivateScourgeMinion(Creature* minion)
+{
+    if (!minion)
+        return;
+
+    minion->setActive(true);
+    minion->SetWanderDistance(1.0f);
+}
+
+static bool IsScourgeInvasionMinionEntry(uint32 entry)
+{
+    switch (entry)
+    {
+        case NPC_SKELETAL_SHOCKTROOPER:
+        case NPC_GHOUL_BERSERKER:
+        case NPC_SPECTRAL_SOLDIER:
+        case NPC_LUMBERING_HORROR:
+        case NPC_BONE_WITCH:
+        case NPC_SPIRIT_OF_THE_DAMNED:
+            return true;
+        default:
+            return false;
+    }
 }
 
 static bool IsScourgeCommuniqueTarget(WorldObject* obj, uint32 spellId)
@@ -547,26 +574,38 @@ public:
 
     // ---- invasion zone handling (world thread only) ----
 
-    bool IsActiveZone(uint32 zoneId)
+    void AddPendingInvasion(uint32 zoneId)
     {
-        InvasionZoneDef const* def = FindInvasionZoneByZoneId(zoneId);
-        if (!def)
-            return false;
+        std::lock_guard<std::mutex> guard(_mutex);
+        _pendingInvasions.insert(zoneId);
+    }
 
-        ObjectGuid mouthGuid = GetMouthGuid(zoneId);
-        if (mouthGuid.IsEmpty())
-            return false;
+    void RemovePendingInvasion(uint32 zoneId)
+    {
+        std::lock_guard<std::mutex> guard(_mutex);
+        _pendingInvasions.erase(zoneId);
+    }
 
-        Map* map = sMapMgr->FindMap(def->map, 0);
-        return map && map->GetCreature(mouthGuid);
+    // Mirrors Acore: always false — duplicate-start prevention uses mouthGuid on the map.
+    bool IsActiveZone(uint32 /*zoneId*/) const
+    {
+        return false;
     }
 
     uint32 GetActiveZones()
     {
-        uint32 count = 0;
+        std::lock_guard<std::mutex> guard(_mutex);
+        uint32 count = uint32(_pendingInvasions.size());
         for (InvasionZoneDef const& def : g_invasionZoneDefs)
-            if (IsActiveZone(def.zoneId))
+        {
+            ObjectGuid mouthGuid = _mouthGuids.count(def.zoneId) ? _mouthGuids.at(def.zoneId) : ObjectGuid::Empty;
+            if (mouthGuid.IsEmpty())
+                continue;
+
+            Map* map = sMapMgr->FindMap(def.map, 0);
+            if (map && map->GetCreature(mouthGuid))
                 ++count;
+        }
         return count;
     }
 
@@ -618,35 +657,47 @@ public:
 
     bool ResumeInvasion(InvasionZoneDef const& def)
     {
-        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Resuming invasion in zone {} ({} necropolises remaining).", def.zoneId, GetSIRemaining(def.remainingIdx));
+        uint32 const numRemaining = GetSIRemaining(def.remainingIdx);
+        TC_LOG_INFO("gameevent", "[ScourgeInvasion] Resuming invasion in zone {} ({} necropolises remaining).", def.zoneId, numRemaining);
+
+        for (uint32 i = 0; i < numRemaining; ++i)
+        {
+            if (!sMapMgr->CreateBaseMap(def.map))
+            {
+                TC_LOG_ERROR("gameevent", "[ScourgeInvasion] ResumeInvasion unable to access map {}, retrying next tick.", def.map);
+                return false;
+            }
+        }
 
         Map* map = sMapMgr->CreateBaseMap(def.map);
         if (!map)
-        {
-            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] ResumeInvasion unable to access map {}, retrying next tick.", def.map);
             return false;
-        }
 
         return SummonMouth(map, def, false);
     }
 
     bool SummonMouth(Map* map, InvasionZoneDef const& def, bool newInvasion)
     {
+        AddPendingInvasion(def.zoneId);
+
         if (Creature* existingMouth = map->GetCreature(GetMouthGuid(def.zoneId)))
             existingMouth->DespawnOrUnsummon();
 
-        Creature* mouth = map->SummonCreature(NPC_HERALD_OF_THE_LICH_KING, def.mouth);
-        if (!mouth)
+        bool success = false;
+        if (Creature* mouth = map->SummonCreature(NPC_HERALD_OF_THE_LICH_KING, def.mouth))
         {
-            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] Failed to summon Herald of the Lich King in zone {}.", def.zoneId);
-            return false;
-        }
+            SetMouthGuid(def.zoneId, mouth->GetGUID());
+            if (newInvasion)
+                SetSIRemaining(def.remainingIdx, def.necropolisCount);
 
-        SetMouthGuid(def.zoneId, mouth->GetGUID());
-        if (newInvasion)
-            SetSIRemaining(def.remainingIdx, def.necropolisCount);
-        mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
-        return true;
+            mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
+            success = true;
+        }
+        else
+            TC_LOG_ERROR("gameevent", "[ScourgeInvasion] Failed to summon Herald of the Lich King in zone {}.", def.zoneId);
+
+        RemovePendingInvasion(def.zoneId);
+        return success;
     }
 
     void HandleActiveZone(InvasionZoneDef const& def, TimePoint now)
@@ -762,6 +813,7 @@ private:
     uint32 _broadcastTimer = 10000;
     std::map<uint32, ObjectGuid> _mouthGuids;
     std::map<uint32, ObjectGuid> _pallidGuids;
+    std::set<uint32> _pendingInvasions;
 };
 
 #define sScourgeInvasionMgr ScourgeInvasionMgr::instance()
@@ -888,7 +940,7 @@ private:
 
 struct npc_necropolis_health : public ScriptedAI
 {
-    npc_necropolis_health(Creature* creature) : ScriptedAI(creature)
+    explicit npc_necropolis_health(Creature* creature) : ScriptedAI(creature)
     {
         me->setActive(true);
         me->SetFullHealth(); // RegenHealth is disabled
@@ -1096,11 +1148,7 @@ struct npc_necrotic_shard : public ScriptedAI
 
     void ScheduleMinionSpawnTask()
     {
-        if (_minionTaskScheduled)
-            return;
-        _minionTaskScheduled = true;
-
-        _scheduler.Schedule(Seconds(5), [this](TaskContext context) // Spawn minions every 5 seconds.
+        _scheduler.Schedule(Seconds(5), [this](TaskContext context)
         {
             HandleShardMinionSpawnerSmall();
             context.Repeat(Seconds(5));
@@ -1158,7 +1206,7 @@ struct npc_necrotic_shard : public ScriptedAI
             case SPELL_FIND_CAMP_TYPE:
             {
                 // Don't spawn more minions than finders.
-                if (_nearbyFinderCount < CountMinions(me, 60.0f))
+                if (_nearbyFinderCount < HasMinion(me, 60.0f))
                     return;
 
                 Unit* unitCaster = caster ? caster->ToUnit() : nullptr;
@@ -1250,8 +1298,10 @@ struct npc_necrotic_shard : public ScriptedAI
             if (!finder->IsAlive())
                 continue;
 
+            finder->setActive(true);
+
             // Don't take finders that already have minions.
-            if (CountMinions(finder, ATTACK_DISTANCE))
+            if (HasMinion(finder))
                 continue;
 
             // A finder despawns after summoning the spawner NPC and respawns 150-200s later.
@@ -1284,26 +1334,29 @@ struct npc_necrotic_shard : public ScriptedAI
         }
     }
 
-    static uint32 CountMinions(WorldObject* searcher, float range)
+    static uint32 HasMinion(WorldObject* searcher, float searchDistance = ATTACK_DISTANCE)
     {
+        uint32 minionCounter = 0;
         uint32 const entries[] = { NPC_SKELETAL_SHOCKTROOPER, NPC_GHOUL_BERSERKER, NPC_SPECTRAL_SOLDIER, NPC_LUMBERING_HORROR, NPC_BONE_WITCH, NPC_SPIRIT_OF_THE_DAMNED };
-        uint32 count = 0;
         for (uint32 entry : entries)
         {
             std::list<Creature*> minionList;
-            searcher->GetCreatureListWithEntryInGrid(minionList, entry, range);
+            searcher->GetCreatureListWithEntryInGrid(minionList, entry, searchDistance);
             for (Creature const* minion : minionList)
                 if (minion && minion->IsAlive())
-                    ++count;
+                    ++minionCounter;
         }
-        return count;
+        return minionCounter;
     }
 
     void UpdateFindersAmount()
     {
+        _nearbyFinderCount = 0;
         std::list<Creature*> finderList;
         me->GetCreatureListWithEntryInGrid(finderList, NPC_SCOURGE_INVASION_MINION_FINDER, 60.0f);
-        _nearbyFinderCount = uint32(finderList.size());
+        for (Creature const* finder : finderList)
+            if (finder)
+                ++_nearbyFinderCount;
     }
 
     void DespawnCultists()
@@ -1332,14 +1385,17 @@ struct npc_necrotic_shard : public ScriptedAI
         {
             std::list<GameObject*> goList;
             me->GetGameObjectListWithEntryInGrid(goList, entry, 60.0f);
-            for (GameObject* go : goList)
-                go->DespawnOrUnsummon(0ms, Seconds(DAY));
+            for (GameObject* doodad : goList)
+            {
+                doodad->SetRespawnTime(-1);
+                doodad->DespawnOrUnsummon();
+            }
         }
 
         std::list<Creature*> finderList;
         me->GetCreatureListWithEntryInGrid(finderList, NPC_SCOURGE_INVASION_MINION_FINDER, 60.0f);
         for (Creature* finder : finderList)
-            finder->DespawnOrUnsummon(0ms, Seconds(DAY));
+            finder->DespawnOrUnsummon();
     }
 
     void UpdateAI(uint32 diff) override
@@ -1352,7 +1408,6 @@ private:
     uint32 _spellCampType = 0;
     uint32 _nearbyFinderCount = 0;
     uint8 _zapCount = 0; // 4 = death
-    bool _minionTaskScheduled = false;
 };
 
 // ===== NPC: Minion Spawner (16306/16336/16338) =====
@@ -1361,19 +1416,22 @@ struct npc_minion_spawner : public ScriptedAI
 {
     npc_minion_spawner(Creature* creature) : ScriptedAI(creature)
     {
+        me->setActive(true);
         me->SetReactState(REACT_PASSIVE);
     }
 
     void JustSummoned(Creature* summon) override
     {
-        summon->SetWanderDistance(1.0f);
+        me->SetRespawnTime(0);
+        me->SetCorpseDelay(0);
+        ActivateScourgeMinion(summon);
         DoCastAOE(SPELL_MINION_SPAWN_IN);
     }
 
     void Reset() override
     {
-        // A spawner spawns exactly one minion 5 seconds after being created, then despawns.
-        _scheduler.Schedule(Seconds(5), [this](TaskContext /*context*/)
+        _scheduler.CancelAll();
+        _scheduler.Schedule(Seconds(5), [this](TaskContext const& /*context*/)
         {
             uint32 entry;
             switch (me->GetEntry())
@@ -1395,8 +1453,11 @@ struct npc_minion_spawner : public ScriptedAI
                     break;
             }
 
-            me->SummonCreature(entry, me->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Hours(1));
-            me->DespawnOrUnsummon(Seconds(1));
+            if (Creature* minion = me->SummonCreature(entry, me->GetPosition(), TEMPSUMMON_TIMED_OR_DEAD_DESPAWN, Hours(1)))
+            {
+                ActivateScourgeMinion(minion);
+                DoCastAOE(SPELL_MINION_SPAWN_IN);
+            }
         });
     }
 
@@ -1746,9 +1807,16 @@ class spell_despawner_self : public SpellScript
 
     void HandleDummy(SpellEffIndex /*effIndex*/)
     {
-        if (Unit* caster = GetCaster())
-            if (!caster->IsInCombat())
-                caster->CastSpell(caster, SPELL_SPIRIT_SPAWN_OUT, true);
+        Unit* caster = GetCaster();
+        if (!caster || !caster->IsCreature())
+            return;
+
+        // Acore despawns infrastructure via Spirit Spawn-out; invasion minions must persist.
+        if (IsScourgeInvasionMinionEntry(caster->ToCreature()->GetEntry()))
+            return;
+
+        if (!caster->IsInCombat())
+            caster->CastSpell(caster, SPELL_SPIRIT_SPAWN_OUT, true);
     }
 
     void Register() override
