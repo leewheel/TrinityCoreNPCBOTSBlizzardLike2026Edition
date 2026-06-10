@@ -2,7 +2,7 @@
 ## Title: |cffd4b86a奥术魔典|r (SuperMenu)
 ## Notes: GM 调试魔典 — 配合服务端 .超级菜单 · 羊皮纸咒印风格
 ## Author: leewheel
-## Version: 2.6
+## Version: 2.7
 
 SuperMenu_Core.lua
 SuperMenu_TeleData.lua

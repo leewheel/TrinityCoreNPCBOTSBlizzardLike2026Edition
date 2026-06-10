@@ -2538,6 +2538,10 @@ void BotDataMgr::NotifyPlayerEnteredWorldMap(Player const* player)
     if (!player)
         return;
 
+    // By leewheel 20260610 - GM SuperMenu bookmark/map teleports should not wake continent wanderer AI storms.
+    if (player->IsGameMaster())
+        return;
+
     Map const* map = player->GetMap();
     if (!map || !map->GetEntry()->IsWorldMap())
         return;

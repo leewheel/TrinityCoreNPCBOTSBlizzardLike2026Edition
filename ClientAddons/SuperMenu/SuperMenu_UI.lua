@@ -134,7 +134,9 @@ function SuperMenu.BuildQuickPanel(page)
             Btn(page.footer, "折跃", 58, 22, function()
                 local b = SuperMenu_GetBookmarks()[slot]
                 if b and b.mapId then
-                    SendSMUTeleport(b.mapId, b.x, b.y, b.z, b.o)
+                    -- 书签折跃走 MARK;GO（服务端安全折跃），附带坐标供首次同步
+                    SendSMU(string.format("MARK;%d;GO;%d;%.2f;%.2f;%.2f;%.2f",
+                        slot, b.mapId, b.x, b.y, b.z, b.o or 0))
                 else
                     print("|cffff6666奥术魔典:|r 书签 " .. slot .. " 未铭刻。")
                 end

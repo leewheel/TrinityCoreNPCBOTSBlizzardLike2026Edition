@@ -56,6 +56,11 @@ public:
     {
         return SuperMenuAddon::TryHandleIncoming(player, message);
     }
+
+    void OnLogout(Player* player) override
+    {
+        SuperMenuAddon::OnPlayerLogout(player);
+    }
 };
 
 void AddSC_super_menu_commandscript()

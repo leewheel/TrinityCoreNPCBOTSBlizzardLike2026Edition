@@ -16,6 +16,7 @@ namespace SuperMenuAddon
     void SendToClient(Player* player, std::string const& payload);
     bool TryHandleIncoming(Player* player, std::string_view message);
     void OpenUI(Player* player);
+    void OnPlayerLogout(Player* player);
 }
 
 #endif

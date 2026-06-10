@@ -11,6 +11,8 @@
 #include "DisableMgr.h"
 #include "Item.h"
 #include "Map.h"
+#include "MapManager.h"
+#include "MotionMaster.h"
 #include "ObjectMgr.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -21,6 +23,7 @@
 #include "Util.h"
 #include "WorldSession.h"
 
+#include <array>
 #include <sstream>
 #include <unordered_map>
 #include <vector>
@@ -98,11 +101,80 @@ namespace
     }
 
     std::unordered_map<ObjectGuid::LowType, uint32> g_SummonCooldown;
+    std::unordered_map<ObjectGuid::LowType, uint32> g_BookmarkTeleportCooldown;
+
+    struct SmuBookmark
+    {
+        uint32 mapId = 0;
+        float x = 0.f;
+        float y = 0.f;
+        float z = 0.f;
+        float o = 0.f;
+        bool valid = false;
+    };
+
+    // slots 1..5 (index 0 unused)
+    std::unordered_map<ObjectGuid::LowType, std::array<SmuBookmark, 6>> g_PlayerBookmarks;
+
+    void ClearPlayerSuperMenuState(ObjectGuid::LowType guidLow)
+    {
+        g_SummonCooldown.erase(guidLow);
+        g_BookmarkTeleportCooldown.erase(guidLow);
+        g_PlayerBookmarks.erase(guidLow);
+    }
 
     void Notify(Player* player, std::string const& msg)
     {
         if (player && player->GetSession())
             ChatHandler(player->GetSession()).SendSysMessage(msg.c_str());
+    }
+
+    SmuBookmark* GetBookmarkSlot(Player* player, uint8 slot)
+    {
+        if (!player || slot < 1 || slot > 5)
+            return nullptr;
+        return &g_PlayerBookmarks[player->GetGUID().GetCounter()][slot];
+    }
+
+    // By leewheel 20260610 - bookmark teleport must not stack Player::TeleportTo near semaphores (causes progressive server lag).
+    bool TeleportPlayerBookmark(Player* player, uint32 mapId, float x, float y, float z, float o)
+    {
+        if (!player)
+            return false;
+
+        if (!MapManager::IsValidMapCoord(mapId, x, y, z, o))
+        {
+            Notify(player, "书签坐标无效。");
+            return false;
+        }
+
+        ObjectGuid::LowType const guidLow = player->GetGUID().GetCounter();
+        uint32 const now = getMSTime();
+        if (g_BookmarkTeleportCooldown[guidLow] > now)
+        {
+            Notify(player, "书签折跃冷却中，请稍候。");
+            return false;
+        }
+        g_BookmarkTeleportCooldown[guidLow] = now + 750;
+
+        player->SetSemaphoreTeleportNear(false);
+        player->SetSemaphoreTeleportFar(false);
+
+        if (mapId == player->GetMapId())
+        {
+            player->CombatStop();
+            player->GetMotionMaster()->InterruptOnTeleport();
+            player->RemoveAurasWithInterruptFlags(AURA_INTERRUPT_FLAG_TELEPORTED | AURA_INTERRUPT_FLAG_MOVE | AURA_INTERRUPT_FLAG_TURNING);
+
+            Position const pos(x, y, z, o);
+            if (!player->GetSession()->PlayerLogout())
+                player->SendTeleportPacket(pos);
+            player->UpdatePosition(pos, true);
+            player->UpdateObjectVisibility();
+            return true;
+        }
+
+        return player->TeleportTo(mapId, x, y, z, o, TELE_TO_GM_MODE);
     }
 
     bool ApplyDebugEnchant(Player* player, int32 enchantId, uint8 equipSlot)
@@ -168,6 +240,13 @@ void SuperMenuAddon::OpenUI(Player* player)
         return;
 
     SendToClient(player, "UI_OPEN");
+}
+
+void SuperMenuAddon::OnPlayerLogout(Player* player)
+{
+    if (!player)
+        return;
+    ClearPlayerSuperMenuState(player->GetGUID().GetCounter());
 }
 
 bool SuperMenuAddon::TryHandleIncoming(Player* player, std::string_view message)
@@ -460,25 +539,85 @@ bool SuperMenuAddon::TryHandleIncoming(Player* player, std::string_view message)
 
         if (parts[2] == "SET")
         {
+            SmuBookmark* mark = GetBookmarkSlot(player, *slot);
+            if (!mark)
+                return true;
+
+            mark->mapId = player->GetMapId();
+            mark->x = player->GetPositionX();
+            mark->y = player->GetPositionY();
+            mark->z = player->GetPositionZ();
+            mark->o = player->GetOrientation();
+            mark->valid = true;
+
             std::ostringstream ss;
             ss << "MARK;" << uint32(*slot) << ";"
-               << player->GetMapId() << ';'
-               << player->GetPositionX() << ';'
-               << player->GetPositionY() << ';'
-               << player->GetPositionZ() << ';'
-               << player->GetOrientation();
+               << mark->mapId << ';'
+               << mark->x << ';'
+               << mark->y << ';'
+               << mark->z << ';'
+               << mark->o;
             SendToClient(player, ss.str());
             Notify(player, Trinity::StringFormat("已记录 {} 号坐标。", *slot));
         }
-        else if (parts[2] == "GO" && parts.size() >= 8)
+        else if (parts[2] == "GO")
         {
-            Optional<uint32> mapId = Trinity::StringTo<uint32>(parts[3]);
-            Optional<float> x = Trinity::StringTo<float>(parts[4]);
-            Optional<float> y = Trinity::StringTo<float>(parts[5]);
-            Optional<float> z = Trinity::StringTo<float>(parts[6]);
-            Optional<float> o = Trinity::StringTo<float>(parts[7]);
-            if (mapId && x && y && z && o)
-                player->TeleportTo(*mapId, *x, *y, *z, *o, TELE_TO_GM_MODE);
+            SmuBookmark* mark = GetBookmarkSlot(player, *slot);
+            if (!mark)
+                return true;
+
+            uint32 mapId = 0;
+            float x = 0.f;
+            float y = 0.f;
+            float z = 0.f;
+            float o = 0.f;
+            bool haveCoords = false;
+
+            if (mark->valid)
+            {
+                mapId = mark->mapId;
+                x = mark->x;
+                y = mark->y;
+                z = mark->z;
+                o = mark->o;
+                haveCoords = true;
+            }
+            else if (parts.size() >= 8)
+            {
+                // legacy: client-side bookmark cache, import once then use server storage
+                Optional<uint32> parsedMap = Trinity::StringTo<uint32>(parts[3]);
+                Optional<float> px = Trinity::StringTo<float>(parts[4]);
+                Optional<float> py = Trinity::StringTo<float>(parts[5]);
+                Optional<float> pz = Trinity::StringTo<float>(parts[6]);
+                Optional<float> po = Trinity::StringTo<float>(parts[7]);
+                if (parsedMap && px && py && pz && po)
+                {
+                    mapId = *parsedMap;
+                    x = *px;
+                    y = *py;
+                    z = *pz;
+                    o = *po;
+                    haveCoords = true;
+                }
+            }
+
+            if (!haveCoords)
+            {
+                Notify(player, Trinity::StringFormat("{} 号书签未铭刻。", *slot));
+                return true;
+            }
+
+            mark->mapId = mapId;
+            mark->x = x;
+            mark->y = y;
+            mark->z = z;
+            mark->o = o;
+            mark->valid = true;
+
+            if (TeleportPlayerBookmark(player, mapId, x, y, z, o))
+                Notify(player, Trinity::StringFormat("已折跃至 {} 号书签。", *slot));
+            else if (mapId != player->GetMapId())
+                Notify(player, "书签折跃失败。");
         }
         return true;
     }
