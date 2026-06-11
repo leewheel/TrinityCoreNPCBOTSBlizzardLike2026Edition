@@ -5209,7 +5209,17 @@ REPLACE INTO `gossip_menu` (`MenuID`, `TextID`) VALUES
 (7231, 8437),
 (7232, 8438);
 
-UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7165 WHERE `entry` = 16385;
+DELETE FROM `gossip_menu_option` WHERE `MenuID` = 7165 AND `OptionID` = 0;
+INSERT INTO `gossip_menu_option` (`MenuID`, `OptionID`, `OptionIcon`, `OptionText`, `OptionBroadcastTextID`, `OptionType`, `OptionNpcFlag`, `ActionMenuID`, `ActionPoiID`, `BoxCoded`, `BoxMoney`, `BoxText`, `BoxBroadcastTextID`, `VerifiedBuild`) VALUES
+(7165, 0, 1, '我想使用死亡符文。', 0, 3, 128, 0, 0, 0, 0, '', 0, 0);
+
+DELETE FROM `gossip_menu_option` WHERE `MenuID` IN (7230, 7231, 7232) AND `OptionID` = 0;
+INSERT INTO `gossip_menu_option` (`MenuID`, `OptionID`, `OptionIcon`, `OptionText`, `OptionBroadcastTextID`, `OptionType`, `OptionNpcFlag`, `ActionMenuID`, `ActionPoiID`, `BoxCoded`, `BoxMoney`, `BoxText`, `BoxBroadcastTextID`, `VerifiedBuild`) VALUES
+(7230, 0, 1, '看看这些装备，或许有你用得上的。', 0, 3, 128, 0, 0, 0, 0, '', 0, 0),
+(7231, 0, 1, '看看这些装备，或许有你用得上的。', 0, 3, 128, 0, 0, 0, 0, '', 0, 0),
+(7232, 0, 1, '用死亡符文来换取强效黎明印记。', 0, 3, 128, 0, 0, 0, 0, '', 0, 0);
+
+UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7165 WHERE `entry` IN (16385, 16786, 16787);
 UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7230 WHERE `entry` = 16363;
 
 SET UNIQUE_CHECKS = @OLD_UNIQUE_CHECKS;

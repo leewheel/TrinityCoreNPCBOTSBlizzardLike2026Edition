@@ -1190,6 +1190,8 @@ struct npc_necrotic_shard : public ScriptedAI
     {
         me->setActive(true);
         me->SetReactState(REACT_PASSIVE);
+        // Blizzlike: crystal HP only drops from scourge minion death zaps, never passive regen.
+        me->SetRegenerateHealth(false);
         // No healing possible.
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL, true);
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL_PCT, true);
@@ -1986,8 +1988,19 @@ class spell_scourge_invasion_communique_filter : public SpellScript
     void PreventInvalidHit(SpellEffIndex effIndex)
     {
         if (WorldObject* target = GetHitUnit() ? static_cast<WorldObject*>(GetHitUnit()) : GetHitGObj())
-            if (!IsValidScourgeInvasionBoltTarget(target, GetSpellInfo()->Id))
+        {
+            uint32 const spellId = GetSpellInfo()->Id;
+            // Crystal zaps are cast on self by dying minions; only block players/bots/guards.
+            if (spellId == SPELL_ZAP_CRYSTAL || spellId == SPELL_DAMAGE_CRYSTAL || spellId == SPELL_ZAP_CRYSTAL_CORPSE)
+            {
+                if (IsPlayerOrCompanion(target))
+                    PreventHitDefaultEffect(effIndex);
+                return;
+            }
+
+            if (!IsValidScourgeInvasionBoltTarget(target, spellId))
                 PreventHitDefaultEffect(effIndex);
+        }
     }
 
     void Register() override

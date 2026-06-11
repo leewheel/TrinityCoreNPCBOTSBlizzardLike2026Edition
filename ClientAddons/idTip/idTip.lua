@@ -114,12 +114,9 @@ end
 
 local function splitItemString(itemString)
   local itemSplit = {}
-  for v in string.gmatch(itemString, "(%d*:?)") do
-    if v == ":" then
-      itemSplit[#itemSplit + 1] = 0
-    else
-      itemSplit[#itemSplit + 1] = tonumber(string.gsub(v, ":", "")) or 0
-    end
+  -- Append trailing ':' so the last field is captured; empty fields become 0.
+  for part in string.gmatch(itemString .. ":", "([^:]*):") do
+    itemSplit[#itemSplit + 1] = tonumber(part) or 0
   end
   return itemSplit
 end
@@ -161,13 +158,45 @@ end
 
 local hooksInstalled = false
 
+-- 3.3.5 uses hex GUIDs (0xF130890300002235); retail uses Creature-0-...-entry-spawn.
+local function npcIdFromGuid(guid)
+  if not guid or guid == "" then return end
+
+  if guid:find("-", 1, true) then
+    local unitType = guid:match("^(%a+)")
+    if unitType == "Player" or unitType == "Pet" then return end
+    local id = tonumber(guid:match("-(%d+)-%x+$"), 10)
+    if not id then
+      id = tonumber(guid:match("Creature%-[^%-]+%-[^%-]+%-([^%-]+)"), 10)
+    end
+    return id
+  end
+
+  if guid:sub(1, 2) == "0x" and #guid >= 10 then
+    -- 0x0000... = player character
+    if guid:sub(3, 6) == "0000" then return end
+    local id = tonumber(guid:sub(7, 12), 16)
+    if id and id > 0 then return id end
+  end
+end
+
 local function npcIdFromUnit(unit)
   if not unit or not UnitGUID then return end
-  local guid = UnitGUID(unit)
-  if not guid then return end
-  local unitType = guid:match("^(%a+)-")
-  if unitType == "Player" or unitType == "Pet" then return end
-  return tonumber(guid:match("-(%d+)-%x+$"), 10)
+  if UnitIsPlayer and UnitIsPlayer(unit) then return end
+  return npcIdFromGuid(UnitGUID(unit))
+end
+
+local function unitFromTooltip(tooltip)
+  if not tooltip or not tooltip.GetUnit then return end
+  local _, unit = tooltip:GetUnit()
+  if unit and UnitExists(unit) then return unit end
+  if UnitExists("mouseover") then return "mouseover" end
+end
+
+local function attachUnitTooltip(tooltip)
+  local unit = unitFromTooltip(tooltip)
+  local id = npcIdFromUnit(unit)
+  if id then add(tooltip, id, "unit") end
 end
 
 local function installTooltipHooks()
@@ -229,10 +258,16 @@ local function installTooltipHooks()
     end)
   end
 
+  -- FrameXML helper used by target/mouseover unit frames in 3.3.5.
+  if GameTooltip_SetUnit then
+    hook(_G, "GameTooltip_SetUnit", function(unit)
+      local id = npcIdFromUnit(unit)
+      if id then add(GameTooltip, id, "unit") end
+    end)
+  end
+
   hookScript(GameTooltip, "OnTooltipSetUnit", function(tooltip)
-    local _, unit = tooltip:GetUnit()
-    local id = npcIdFromUnit(unit)
-    if id then add(tooltip, id, "unit") end
+    attachUnitTooltip(tooltip)
   end)
 
   local function onSetItem(tooltip)

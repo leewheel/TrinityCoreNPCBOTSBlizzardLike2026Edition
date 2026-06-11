@@ -2522,14 +2522,14 @@ UPDATE `creature_template` SET `AIName` = '', `ScriptName` = 'npc_shadow_of_doom
 
 DELETE FROM `creature_text` WHERE `CreatureID` = 16143;
 INSERT INTO `creature_text` (`CreatureID`,`GroupID`,`ID`,`Text`,`Type`,`Language`,`Probability`,`Emote`,`Duration`,`Sound`,`BroadcastTextId`,`TextRange`,`comment`) VALUES
-(16143,0,0,'终于自由了！黑暗的力量将吞噬这个世界！',14,0,100,0,0,0,12420,0,'Shadow of Doom - spawn yell 1'),
-(16143,0,1,'我饥渴的灵魂渴望毁灭！',14,0,100,0,0,0,12421,0,'Shadow of Doom - spawn yell 2'),
-(16143,0,2,'是谁唤醒了我？是谁渴求死亡？',14,0,100,0,0,0,12422,0,'Shadow of Doom - spawn yell 3'),
-(16143,0,3,'凡人的血肉将成为天灾的养料！',14,0,100,0,0,0,12243,0,'Shadow of Doom - spawn yell 4');
+(16143,0,0,'终于自由了！黑暗的力量将吞噬这个世界！',14,0,100,0,0,0,0,0,'Shadow of Doom - spawn yell 1'),
+(16143,0,1,'我饥渴的灵魂渴望毁灭！',14,0,100,0,0,0,0,0,'Shadow of Doom - spawn yell 2'),
+(16143,0,2,'是谁唤醒了我？是谁渴求死亡？',14,0,100,0,0,0,0,0,'Shadow of Doom - spawn yell 3'),
+(16143,0,3,'凡人的血肉将成为天灾的养料！',14,0,100,0,0,0,0,0,'Shadow of Doom - spawn yell 4');
 
 DELETE FROM `creature_text` WHERE `CreatureID` = 10181 AND `GroupID` = 3;
 INSERT INTO `creature_text` (`CreatureID`,`GroupID`,`ID`,`Text`,`Type`,`Language`,`Probability`,`Emote`,`Duration`,`Sound`,`BroadcastTextId`,`TextRange`,`comment`) VALUES
-(10181,3,0,'针对我王庭的天灾攻击已被消灭。你们可以继续做自己的事了。',12,0,100,0,0,0,12331,0,'Lady Sylvanas - SI city attack defeated');
+(10181,3,0,'针对我王庭的天灾攻击已被消灭。你们可以继续做自己的事了。',12,0,100,0,0,0,0,0,'Lady Sylvanas - SI city attack defeated');
 
 -- 7) Reset runtime state so the rework starts clean (victories are kept)
 UPDATE `scourge_invasion_state` SET `remainingNecropoli` = 0, `attackTimer` = 0;
