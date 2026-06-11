@@ -279,6 +279,21 @@ static bool LooksMostlyChinese(std::string_view text)
     return ascii < (text.size() * 3 / 4);
 }
 
+// 3.3.5 ChatFrame concatenates CHAT_*_GET with message then runs string.format(); literal % must be escaped.
+static std::string EscapeClientChatFormat(std::string_view text)
+{
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char ch : text)
+    {
+        if (ch == '%')
+            escaped.append("%%");
+        else
+            escaped.push_back(ch);
+    }
+    return escaped;
+}
+
 static std::string LimitChineseReplyLength(std::string_view text, size_t maxHanChars)
 {
     // By leewheel 20260528 - hard cap bot chat length by CJK codepoints, keep punctuation if attached.
@@ -311,7 +326,7 @@ static std::string LimitChineseReplyLength(std::string_view text, size_t maxHanC
         i += n;
     }
 
-    return out;
+    return EscapeClientChatFormat(out);
 }
 
 static void PushSceneEventByEntry(uint32 botEntry, std::string_view eventText)
@@ -902,12 +917,7 @@ static std::string BuildBotChatTemplate(Creature const* bot, std::string_view ch
             objectiveHint, channelStyle);
     }
 
-    std::string llmReply;
-    if (NpcBotChatLLM::Engine::Instance().IsEnabled())
-        llmReply = NpcBotChatLLM::Engine::Instance().GenerateReply(bot, persona);
-    if (!llmReply.empty())
-        persona = std::move(llmReply);
-    else if (channelHint == "打招呼")
+    if (channelHint == "打招呼")
     {
         static std::string_view const greetLines[] =
         {
@@ -2454,7 +2464,29 @@ bool BotDataMgr::TryHandleWhisperToWandererBot(Player* player, std::string_view 
     std::string reply = BuildBotChatTemplate(bot, "密语");
     if (reply.empty())
         reply = "收到，我在。";
+
     mutableBot->Whisper(reply, LANG_UNIVERSAL, player);
+
+    if (NpcBotChatLLM::Engine::Instance().IsEnabled())
+    {
+        ObjectGuid const playerGuid = player->GetGUID();
+        uint32 const botEntry = bot->GetEntry();
+        std::string const fallback = reply;
+        NpcBotChatLLM::Engine::Instance().QueueReply(bot, fallback, [playerGuid, botEntry, fallback](std::string const& llmReply)
+        {
+            if (llmReply.empty() || llmReply == fallback)
+                return;
+
+            Creature const* replyBot = BotDataMgr::FindBot(botEntry);
+            Player* replyPlayer = ObjectAccessor::FindPlayer(playerGuid);
+            if (!replyBot || !replyPlayer || !replyBot->IsInWorld())
+                return;
+
+            std::string msg = LimitChineseReplyLength(llmReply, 100);
+            const_cast<Creature*>(replyBot)->Whisper(msg, LANG_UNIVERSAL, replyPlayer);
+        });
+    }
+
     _botChatCooldownUntilMs[bot->GetEntry()] = GameTime::GetGameTimeMS() + 5000u;
     return true;
 }
@@ -2686,6 +2718,7 @@ void BotDataMgr::InitNpcBotLLM()
 void BotDataMgr::Update(uint32 diff)
 {
     RefreshNpcBotLLMConfig();
+    NpcBotChatLLM::Engine::Instance().PollCompletedReplies();
     UpdateWandererGridRecycle(diff);
     TryBotChannelChat(diff); // By leewheel 20260528 - world/party/raid chat ticker.
 

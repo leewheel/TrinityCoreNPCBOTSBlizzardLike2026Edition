@@ -253,6 +253,20 @@ void bot_ai::InitializeAI()
     Reset();
 }
 
+static std::string EscapeClientChatFormat(std::string_view text)
+{
+    std::string escaped;
+    escaped.reserve(text.size());
+    for (char ch : text)
+    {
+        if (ch == '%')
+            escaped.append("%%");
+        else
+            escaped.push_back(ch);
+    }
+    return escaped;
+}
+
 void bot_ai::BotSay(std::string_view text, Player const* target) const
 {
     if (!target && master->IsPlayer())
@@ -260,7 +274,7 @@ void bot_ai::BotSay(std::string_view text, Player const* target) const
     if (!target)
         return;
 
-    me->Say(text, LANG_UNIVERSAL, target);
+    me->Say(EscapeClientChatFormat(text), LANG_UNIVERSAL, target);
 }
 void bot_ai::BotWhisper(std::string_view text, Player const* target) const
 {
@@ -270,11 +284,11 @@ void bot_ai::BotWhisper(std::string_view text, Player const* target) const
         return;
 
     //Problem : Unit::Whisper target argument is non-const for no reason
-    me->Whisper(text, LANG_UNIVERSAL, const_cast<Player*>(target));
+    me->Whisper(EscapeClientChatFormat(text), LANG_UNIVERSAL, const_cast<Player*>(target));
 }
 void bot_ai::BotYell(std::string_view text, Player const* /*target*/) const
 {
-    me->Yell(text, LANG_UNIVERSAL);
+    me->Yell(EscapeClientChatFormat(text), LANG_UNIVERSAL);
 }
 
 void bot_ai::ReportSpellCast(uint32 spellId, const std::string& followedByString, Player const* target) const

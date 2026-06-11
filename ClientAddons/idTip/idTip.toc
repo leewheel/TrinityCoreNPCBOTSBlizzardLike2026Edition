@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: idTip
+## Version: 3.3.5-2
+## Notes: Adds various IDs to tooltips (WotLK 3.3.5)
+## Author: silverwind (WotLK port By leewheel)
+## SavedVariables: idTipConfig
+idTip.lua

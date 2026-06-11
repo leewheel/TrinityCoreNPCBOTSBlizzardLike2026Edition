@@ -6,6 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <filesystem>
 #include <mutex>
 #include <optional>
@@ -257,6 +260,14 @@ static void LlamaLogCallback(ggml_log_level level, char const* text, void* /*use
 }
 #endif
 
+struct LlmJob
+{
+    uint32 botEntry = 0;
+    std::string prompt;
+    std::string reply;
+    LlmReplyCallback callback;
+};
+
 struct RuntimeState
 {
 #ifdef TRINITY_NPCBOT_LLM_EMBED
@@ -264,10 +275,30 @@ struct RuntimeState
     llama_context* context = nullptr;
 #endif
     std::mutex inferMutex;
+    std::mutex queueMutex;
+    std::condition_variable queueCv;
+    std::deque<LlmJob> pending;
+    std::deque<LlmJob> finished;
+    std::thread worker;
+    std::atomic<bool> workerRunning{ false };
     bool loaded = false;
     bool useGpu = false;
     std::string loadedPath;
 };
+
+static void StopLlmWorker(RuntimeState* rt)
+{
+    if (!rt || !rt->workerRunning.exchange(false))
+        return;
+
+    rt->queueCv.notify_all();
+    if (rt->worker.joinable())
+        rt->worker.join();
+
+    std::scoped_lock lk(rt->queueMutex);
+    rt->pending.clear();
+    rt->finished.clear();
+}
 
 Engine& Engine::Instance()
 {
@@ -298,6 +329,7 @@ void Engine::Configure(bool enabled, std::string modelPath, bool useGpu)
 #ifdef TRINITY_NPCBOT_LLM_EMBED
     if (!_enabled || _modelPath.empty())
     {
+        StopLlmWorker(_runtime);
         if (_runtime)
         {
             if (_runtime->context)
@@ -520,9 +552,88 @@ static std::string TrimIncompleteSentenceTail(std::string text)
     return text;
 }
 
-std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt) const
+void Engine::EnsureWorker()
 {
-    if (!bot || !IsEnabled())
+    RuntimeState* rt = _runtime;
+    if (!rt || rt->workerRunning.load())
+        return;
+
+    rt->workerRunning.store(true);
+    rt->worker = std::thread([this]() { WorkerLoop(); });
+}
+
+void Engine::QueueReply(Creature const* bot, std::string prompt, LlmReplyCallback callback)
+{
+    if (!bot || !IsEnabled() || !callback)
+        return;
+
+    RuntimeState* rt = _runtime;
+    if (!rt || !rt->loaded)
+        return;
+
+    EnsureWorker();
+
+    LlmJob job;
+    job.botEntry = bot->GetEntry();
+    job.prompt = std::move(prompt);
+    job.callback = std::move(callback);
+
+    {
+        std::scoped_lock lk(rt->queueMutex);
+        constexpr size_t maxPending = 16;
+        if (rt->pending.size() >= maxPending)
+            return;
+        rt->pending.push_back(std::move(job));
+    }
+    rt->queueCv.notify_one();
+}
+
+void Engine::PollCompletedReplies()
+{
+    RuntimeState* rt = _runtime;
+    if (!rt)
+        return;
+
+    std::deque<LlmJob> ready;
+    {
+        std::scoped_lock lk(rt->queueMutex);
+        ready.swap(rt->finished);
+    }
+
+    for (LlmJob& job : ready)
+        if (job.callback)
+            job.callback(job.reply);
+}
+
+void Engine::WorkerLoop()
+{
+    RuntimeState* rt = _runtime;
+    while (rt && rt->workerRunning.load())
+    {
+        LlmJob job;
+        {
+            std::unique_lock lk(rt->queueMutex);
+            rt->queueCv.wait(lk, [&]() { return !rt->pending.empty() || !rt->workerRunning.load(); });
+            if (!rt->workerRunning.load() && rt->pending.empty())
+                break;
+            if (rt->pending.empty())
+                continue;
+            job = std::move(rt->pending.front());
+            rt->pending.pop_front();
+        }
+
+        job.reply = GenerateReplyLocked(job.botEntry, job.prompt);
+
+        {
+            std::scoped_lock lk(rt->queueMutex);
+            rt->finished.push_back(std::move(job));
+        }
+    }
+}
+
+std::string Engine::GenerateReplyLocked(uint32 botEntry, std::string const& prompt) const
+{
+    if (!IsEnabled())
         return {};
 
     RuntimeState* rt = _runtime;
@@ -560,7 +671,7 @@ std::string Engine::GenerateReply(Creature const* bot, std::string const& prompt
     llama_sampler_chain_add(smpl, llama_sampler_init_top_k(40));
     llama_sampler_chain_add(smpl, llama_sampler_init_top_p(0.9f, 1));
     llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.7f));
-    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED + bot->GetEntry()));
+    llama_sampler_chain_add(smpl, llama_sampler_init_dist(LLAMA_DEFAULT_SEED + botEntry));
 
     std::string output;
     std::string carry;

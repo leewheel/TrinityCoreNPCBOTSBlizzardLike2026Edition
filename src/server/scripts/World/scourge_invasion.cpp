@@ -31,6 +31,8 @@
 #include "GridNotifiers.h"
 #include "GridNotifiersImpl.h"
 #include "Log.h"
+#include "Loot.h"
+#include "LootMgr.h"
 #include "Map.h"
 #include "MapManager.h"
 #include "MotionMaster.h"
@@ -245,6 +247,32 @@ static bool IsProtectedFromScourgeStrike(WorldObject* obj)
     return !IsScourgeInvasionMinionEntry(creature->GetEntry());
 }
 
+// Summoned camp minions may miss loot when Unit::Kill skips generation; fix before corpse is opened.
+static void EnsureScourgeInvasionMinionLoot(Creature* creature, Player* player)
+{
+    if (!creature || !player)
+        return;
+
+    if (!creature->hasLootRecipient())
+        creature->SetLootRecipient(player, true);
+
+    Loot* loot = &creature->loot;
+    if (loot->loot_type != LOOT_NONE && !loot->isLooted())
+        return;
+
+    loot->clear();
+    loot->loot_type = LOOT_CORPSE;
+
+    if (uint32 lootId = creature->GetCreatureTemplate()->lootid)
+        loot->FillLoot(lootId, LootTemplates_Creature, player, false, false, creature->GetLootMode());
+
+    if (creature->GetLootMode() > 0)
+        loot->generateMoneyLoot(creature->GetCreatureTemplate()->mingold, creature->GetCreatureTemplate()->maxgold);
+
+    if (!loot->isLooted())
+        creature->SetDynamicFlag(UNIT_DYNFLAG_LOOTABLE);
+}
+
 static bool IsValidScourgeInvasionBoltTarget(WorldObject* obj, uint32 spellId)
 {
     if (!obj || IsPlayerOrCompanion(obj))
@@ -289,6 +317,8 @@ public:
                 _remaining[def->remainingIdx] = remaining;
                 if (attackTimer)
                     _timers[def->timerIdx] = now + std::chrono::seconds(attackTimer);
+                else if (remaining > 0)
+                    _timers[def->timerIdx] = now + std::chrono::seconds(ZONE_ATTACK_TIMER_MAX);
             }
             else if (CityAttackDef const* city = FindCityAttackByZoneId(zoneId))
             {
@@ -539,6 +569,10 @@ public:
 
         BroadcastWorldStates();
 
+        // Keep global scourge patrol (event #17) alive; its DB length is only 1 minute.
+        if (!sGameEventMgr->IsActiveEvent(GAME_EVENT_SCOURGE_INVASION))
+            sGameEventMgr->StartEvent(GAME_EVENT_SCOURGE_INVASION, true);
+
         for (CityAttackDef const& def : g_cityAttackDefs)
             StartNewCityAttackIfTime(def.zoneId);
 
@@ -739,7 +773,12 @@ public:
         {
             SetMouthGuid(def.zoneId, mouth->GetGUID());
             if (newInvasion)
+            {
                 SetSIRemaining(def.remainingIdx, def.necropolisCount);
+                SetSITimer(def.timerIdx, std::chrono::steady_clock::now() + std::chrono::seconds(urand(ZONE_ATTACK_TIMER_MIN, ZONE_ATTACK_TIMER_MAX)));
+            }
+            else if (GetSIRemaining(def.remainingIdx) > 0 && GetSITimer(def.timerIdx) == TimePoint())
+                SetSITimer(def.timerIdx, std::chrono::steady_clock::now() + std::chrono::seconds(ZONE_ATTACK_TIMER_MAX));
 
             mouth->AI()->DoAction(EVENT_HERALD_OF_THE_LICH_KING_ZONE_START);
             success = true;
@@ -774,7 +813,7 @@ public:
             Creature* mouth = map ? map->GetCreature(mouthGuid) : nullptr;
             if (!mouth)
                 SetMouthGuid(def.zoneId, ObjectGuid::Empty); // re-summon handled next tick
-            else if (timer < now && remaining == 0)
+            else if (timer != TimePoint() && timer < now && remaining == 0)
             {
                 // Zone defended: all necropolises destroyed.
                 SetSITimer(def.timerIdx, nextAttack);
@@ -796,7 +835,15 @@ public:
                 SetSITimer(def.timerIdx, nextAttack);
 
             if (remaining > 0)
-                ResumeInvasion(def); // invasion incomplete but mouth is gone (e.g. after restart)
+            {
+                // Throttle resume attempts (mouth guid is memory-only and lost on restart).
+                auto itr = _zoneResumeCooldown.find(def.zoneId);
+                if (itr == _zoneResumeCooldown.end() || itr->second <= now)
+                {
+                    _zoneResumeCooldown[def.zoneId] = now + std::chrono::minutes(2);
+                    ResumeInvasion(def);
+                }
+            }
             else
                 StartNewInvasionIfTime(def.zoneId);
         }
@@ -874,6 +921,7 @@ private:
     std::map<uint32, ObjectGuid> _mouthGuids;
     std::map<uint32, ObjectGuid> _pallidGuids;
     std::set<uint32> _pendingInvasions;
+    std::map<uint32, TimePoint> _zoneResumeCooldown;
 };
 
 #define sScourgeInvasionMgr ScourgeInvasionMgr::instance()
@@ -1155,6 +1203,21 @@ struct npc_necrotic_shard : public ScriptedAI
         ScheduleTasks();
     }
 
+    // Activate camp type and minion spawning when finders are present but the
+    // necropolis communique chain has not delivered CAMP_RECEIVES_COMMUNIQUE yet.
+    void BootstrapCampActivation()
+    {
+        if (HasCampTypeAura())
+            return;
+
+        UpdateFindersAmount();
+        if (_nearbyFinderCount == 0)
+            return;
+
+        DoCastSelf(SPELL_CHOOSE_CAMP_TYPE, true);
+        ScheduleMinionSpawnTask();
+    }
+
     void ScheduleTasks()
     {
         if (me->GetEntry() == NPC_NECROTIC_SHARD)
@@ -1184,6 +1247,14 @@ struct npc_necrotic_shard : public ScriptedAI
                             go->Respawn();
                         }
                 }
+            });
+
+            // Fallback: communique chain can stall (missing timer aura, necropolis out of range, etc.).
+            _scheduler.Schedule(Seconds(15), [this](TaskContext context)
+            {
+                BootstrapCampActivation();
+                if (!HasCampTypeAura())
+                    context.Repeat(Seconds(15));
             });
         }
         else if (me->GetEntry() == NPC_DAMAGED_NECROTIC_SHARD)
@@ -1256,11 +1327,7 @@ struct npc_necrotic_shard : public ScriptedAI
             case SPELL_CAMP_RECEIVES_COMMUNIQUE:
             {
                 if (!HasCampTypeAura() && me->GetEntry() == NPC_NECROTIC_SHARD)
-                {
-                    UpdateFindersAmount();
-                    DoCastSelf(SPELL_CHOOSE_CAMP_TYPE, true);
-                    ScheduleMinionSpawnTask();
-                }
+                    BootstrapCampActivation();
                 break;
             }
             case SPELL_FIND_CAMP_TYPE:
@@ -2007,6 +2074,28 @@ private:
     bool _initialized = false;
 };
 
+// ===== UnitScript: tag camp minions for loot when damaged by players/bots =====
+
+class ScourgeInvasionUnitScript : public UnitScript
+{
+public:
+    ScourgeInvasionUnitScript() : UnitScript("ScourgeInvasionUnitScript") { }
+
+    void OnDamage(Unit* attacker, Unit* victim, uint32& /*damage*/) override
+    {
+        Creature* creature = victim ? victim->ToCreature() : nullptr;
+        if (!creature || !attacker || !IsScourgeInvasionMinionEntry(creature->GetEntry()))
+            return;
+
+        if (Player* player = attacker->GetCharmerOrOwnerPlayerOrPlayerItself())
+        {
+            if (!creature->hasLootRecipient())
+                creature->SetLootRecipient(player, true);
+            creature->LowerPlayerDamageReq(creature->GetMaxHealth());
+        }
+    }
+};
+
 // ===== PlayerScript: auto-join world channel on login =====
 
 class ScourgeInvasionPlayerScript : public PlayerScript
@@ -2020,6 +2109,14 @@ public:
             return;
         if (ChannelMgr* mgr = ChannelMgr::ForTeam(player->GetTeam()))
             mgr->GetChannel(0, "世界", player);
+    }
+
+    void OnCreatureKill(Player* killer, Creature* killed) override
+    {
+        if (!killer || !killed || !IsScourgeInvasionMinionEntry(killed->GetEntry()))
+            return;
+
+        EnsureScourgeInvasionMinionLoot(killed, killer);
     }
 };
 
@@ -2143,6 +2240,7 @@ public:
 void AddSC_scourge_invasion()
 {
     new ScourgeInvasionWorldScript();
+    new ScourgeInvasionUnitScript();
     new ScourgeInvasionPlayerScript();
     new scourge_invasion_commandscript();
     RegisterGameObjectAI(go_necropolis);
