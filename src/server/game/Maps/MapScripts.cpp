@@ -98,6 +98,27 @@ void Map::ScriptCommandStart(ScriptInfo const& script, uint32 delay, Object* sou
     }
 }
 
+void Map::ScriptsCancel(ObjectGuid const& guid)
+{
+    if (guid.IsEmpty() || m_scriptSchedule.empty())
+        return;
+
+    std::size_t removed = 0;
+    for (ScriptScheduleMap::iterator it = m_scriptSchedule.begin(); it != m_scriptSchedule.end(); )
+    {
+        if (it->second.sourceGUID == guid || it->second.targetGUID == guid)
+        {
+            it = m_scriptSchedule.erase(it);
+            ++removed;
+        }
+        else
+            ++it;
+    }
+
+    if (removed)
+        sMapMgr->DecreaseScheduledScriptCount(removed);
+}
+
 // Helpers for ScriptProcess method.
 inline Player* Map::_GetScriptPlayerSourceOrTarget(Object* source, Object* target, ScriptInfo const* scriptInfo) const
 {
@@ -387,6 +408,17 @@ void Map::ScriptsProcess()
                         step.script->GetDebugInfo(), step.targetGUID.ToString());
                     break;
             }
+        }
+
+        // Source died/despawned: drop delayed db scripts instead of executing with a missing owner.
+        if (!step.sourceGUID.IsEmpty() && !source)
+        {
+            TC_LOG_DEBUG("scripts", "{} dropped: source {} is no longer on the map.",
+                step.script->GetDebugInfo(), step.sourceGUID.ToString());
+            m_scriptSchedule.erase(iter);
+            iter = m_scriptSchedule.begin();
+            sMapMgr->DecreaseScheduledScriptCount();
+            continue;
         }
 
         switch (step.script->command)

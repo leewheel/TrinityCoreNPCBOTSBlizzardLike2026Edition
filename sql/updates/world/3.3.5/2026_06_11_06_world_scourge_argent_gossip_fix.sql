@@ -6,7 +6,8 @@ INSERT INTO `gossip_menu_option` (`MenuID`, `OptionID`, `OptionIcon`, `OptionTex
 (7165, 0, 1, '我想使用死亡符文。', 0, 3, 128, 0, 0, 0, 0, '', 0, 0);
 
 -- Acore: both Argent Quartermaster and Outfitter use menu 7165 + quest 9153 condition.
-UPDATE `creature_template` SET `gossip_menu_id` = 7165 WHERE `entry` IN (16385, 16786, 16787);
+UPDATE `creature_template` SET `gossip_menu_id` = 7165 WHERE `entry` IN (16385, 16786, 16787, 29360);
+UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7230 WHERE `entry` = 29379;
 
 -- Camp outfitter menu (16363) — vendor option without separate condition row.
 DELETE FROM `gossip_menu_option` WHERE `MenuID` IN (7230, 7231, 7232) AND `OptionID` = 0;

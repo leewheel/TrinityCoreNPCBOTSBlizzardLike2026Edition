@@ -558,6 +558,7 @@ void SmartAI::JustDied(Unit* killer)
     if (HasEscortState(SMART_ESCORT_ESCORTING))
         EndPath(true);
 
+    GetScript()->AbortPendingScripts();
     GetScript()->ProcessEventsFor(SMART_EVENT_DEATH, killer);
 }
 

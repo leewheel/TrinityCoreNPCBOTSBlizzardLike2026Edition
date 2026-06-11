@@ -30,6 +30,7 @@ INSERT INTO `smart_scripts` (`entryorguid`, `source_type`, `id`, `link`, `event_
 (16143, 0, 4, 0, 8, 0, 100, 0, 17680, 0, 0, 0, 41, 3000, 0, 1, 'Shadow of Doom - On Spellhit Spirit Spawn - Despawn');
 
 -- ===================================================
--- 4. 军需官难度2 npcflag 同步
+-- 4. 军需官难度1模板与主模板 npcflag / gossip 同步
 -- ===================================================
-UPDATE `creature_template` SET `npcflag` = `npcflag` | 129 WHERE `entry` IN (29360, 29379);
+UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7230 WHERE `entry` = 29379;
+UPDATE `creature_template` SET `npcflag` = `npcflag` | 129, `gossip_menu_id` = 7165 WHERE `entry` = 29360;

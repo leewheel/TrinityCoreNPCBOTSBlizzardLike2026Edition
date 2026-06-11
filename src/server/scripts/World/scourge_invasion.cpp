@@ -1190,9 +1190,14 @@ struct npc_necrotic_shard : public ScriptedAI
     {
         me->setActive(true);
         me->SetReactState(REACT_PASSIVE);
-        // Blizzlike: crystal HP only drops from scourge minion death zaps, never passive regen.
+        ApplyShardHealthPolicies();
+    }
+
+    // Summoned shards have no creature_data curhealth; evade-home SetSpawnHealth() would
+    // otherwise refill them to max whenever combat drops (e.g. player runs off to farm).
+    void ApplyShardHealthPolicies()
+    {
         me->SetRegenerateHealth(false);
-        // No healing possible.
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL, true);
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL_PCT, true);
         me->ApplySpellImmune(0, IMMUNITY_EFFECT, SPELL_EFFECT_HEAL_MAX_HEALTH, true);
@@ -1201,8 +1206,32 @@ struct npc_necrotic_shard : public ScriptedAI
 
     void Reset() override
     {
+        uint32 const health = me->GetHealth();
+        ApplyShardHealthPolicies();
         _scheduler.CancelAll();
         ScheduleTasks();
+        if (health && health < me->GetMaxHealth())
+            me->SetHealth(health);
+    }
+
+    void EnterEvadeMode(EvadeReason why = EVADE_REASON_OTHER) override
+    {
+        uint32 const health = me->GetHealth();
+        if (!_EnterEvadeMode(why))
+            return;
+
+        // Passive crystal must not MoveTargetedHome() -> SetSpawnHealth() (full heal).
+        me->GetMotionMaster()->Clear();
+        me->GetMotionMaster()->MoveIdle();
+        me->ClearUnitState(UNIT_STATE_EVADE);
+        Reset();
+        if (health && health < me->GetMaxHealth())
+            me->SetHealth(health);
+    }
+
+    void HealReceived(Unit* /*done_by*/, uint32& addhealth) override
+    {
+        addhealth = 0;
     }
 
     // Activate camp type and minion spawning when finders are present but the

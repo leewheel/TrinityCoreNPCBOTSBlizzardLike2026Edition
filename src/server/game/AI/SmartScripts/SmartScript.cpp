@@ -3803,6 +3803,19 @@ Unit* SmartScript::DoFindClosestFriendlyInRange(float range, bool playerOnly) co
     return unit;
 }
 
+void SmartScript::AbortPendingScripts()
+{
+    if (isProcessingTimedActionList)
+        return;
+
+    mTimedActionList.clear();
+    mTimedActionListInvoker = ObjectGuid::Empty;
+
+    for (SmartScriptHolder& e : mStoredEvents)
+        e.enableTimed = false;
+    mStoredEvents.clear();
+}
+
 void SmartScript::SetTimedActionList(SmartScriptHolder& e, uint32 entry, Unit* invoker)
 {
     //do NOT clear mTimedActionList if it's being iterated because it will invalidate the iterator and delete

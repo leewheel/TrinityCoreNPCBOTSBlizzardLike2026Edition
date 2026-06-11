@@ -314,6 +314,9 @@ void Creature::RemoveFromWorld()
 {
     if (IsInWorld())
     {
+        if (Map* map = FindMap())
+            map->ScriptsCancel(GetGUID());
+
         if (GetZoneScript())
             GetZoneScript()->OnCreatureRemove(this);
 
@@ -2115,6 +2118,9 @@ void Creature::setDeathState(DeathState s)
 
     if (s == JUST_DIED)
     {
+        if (Map* map = FindMap())
+            map->ScriptsCancel(GetGUID());
+
         m_corpseRemoveTime = GameTime::GetGameTime() + m_corpseDelay;
 
         uint32 respawnDelay = m_respawnDelay;
