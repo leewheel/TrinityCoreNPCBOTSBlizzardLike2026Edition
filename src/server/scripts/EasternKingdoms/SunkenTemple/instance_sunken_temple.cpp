@@ -24,6 +24,7 @@ EndScriptData */
 
 #include "ScriptMgr.h"
 #include "Creature.h"
+#include "CreatureAI.h"
 #include "GameObject.h"
 #include "InstanceScript.h"
 #include "Map.h"
@@ -89,6 +90,7 @@ public:
 
         ObjectGuid JammalAnTheProphetGUID;
         ObjectGuid ShadeOfEranikusGUID;
+        GuidList _dragonkinGuids;
         uint32 EliteTrollsKilled;
 
         uint32 State;
@@ -144,6 +146,10 @@ public:
                 default:
                     break;
             }
+
+            // Track dragonkin for Eranikus combat zone
+            if (creature->GetCreatureType() == CREATURE_TYPE_DRAGONKIN && creature->GetEntry() != NPC_SHADE_OF_ERANIKUS)
+                _dragonkinGuids.push_back(creature->GetGUID());
         }
 
          virtual void Update(uint32 /*diff*/) override // correct order goes form 1-6
@@ -236,6 +242,17 @@ public:
                         if (Creature* creature = instance->GetCreature(ShadeOfEranikusGUID))
                             creature->SetImmuneToAll(false);
                     break;
+                case BOSS_SHADE_OF_ERANIKUS:
+                    if (state == IN_PROGRESS)
+                    {
+                        // All dragonkin enter combat when Eranikus fight starts
+                        if (Creature* eranikus = instance->GetCreature(ShadeOfEranikusGUID))
+                            for (ObjectGuid const& guid : _dragonkinGuids)
+                                if (Creature* dragonkin = instance->GetCreature(guid))
+                                    if (dragonkin->IsAlive() && !dragonkin->IsInCombat())
+                                        dragonkin->SetInCombatWith(eranikus);
+                    }
+                    break;
                 default:
                     break;
             }
@@ -254,7 +271,10 @@ public:
                     if (EliteTrollsKilled == 6)
                     {
                         if (Creature* jammal = instance->GetCreature(JammalAnTheProphetGUID))
+                        {
                             jammal->SetImmuneToPC(false);
+                            jammal->AI()->Talk(0);
+                        }
                         SetBossState(BOSS_EVENT_ELITE_TROLLS, DONE);
                     }
                     SaveToDB();

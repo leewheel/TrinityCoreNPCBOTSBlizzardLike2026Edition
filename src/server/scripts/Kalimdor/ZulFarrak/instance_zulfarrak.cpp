@@ -220,6 +220,9 @@ public:
             {
                 case EVENT_PYRAMID:
                     PyramidPhase = data;
+                    if (data == PYRAMID_GATES_DESTROYED)
+                        if (GameObject* door = instance->GetGameObject(EndDoorGUID))
+                            door->UseDoorOrButton();
                     break;
             }
         }

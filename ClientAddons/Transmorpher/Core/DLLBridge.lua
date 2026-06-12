@@ -1,0 +1,934 @@
+local addon, ns = ...
+
+function ns.SyncOptimizationTierProtection()
+    if not ns.IsMorpherReady or not ns.IsMorpherReady() then return end
+
+    local settings = ns.GetSettings()
+    local cmdQueue = {}
+    local tierOptions = ns.optimizationTierOptions or {}
+
+    for _, tier in ipairs(tierOptions) do
+        local enabled = settings[tier.settingKey] and "1" or "0"
+        table.insert(cmdQueue, "SET:PROTECTED_TIER:" .. tier.key .. ":" .. enabled)
+    end
+
+    if #cmdQueue > 0 then
+        ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
+    end
+end
+
+local function NormalizeHdFontMode(settings)
+    local hdFontMode = tonumber(settings.miscHdFontMode) or 0
+    if hdFontMode <= 0 then hdFontMode = 0 else hdFontMode = 1 end
+    settings.miscHdFontMode = hdFontMode
+    return hdFontMode
+end
+
+-- ============================================================
+-- TRANSMORPHER DLL BRIDGE
+-- Communication with the Transmorpher C++ DLL via global
+-- variables. The DLL polls TRANSMORPHER_CMD every ~20ms.
+-- ============================================================
+
+-- Global variables the DLL interacts with
+TRANSMORPHER_CMD = ""             -- DLL reads this for commands
+-- Preserve the DLL-owned loaded flag across reloads/character swaps.
+TRANSMORPHER_DLL_LOADED = TRANSMORPHER_DLL_LOADED
+TRANSMORPHER_LUA_READY = nil      -- Addon sets this when the world-side Lua environment is ready for DLL interaction
+TRANSMORPHER_ANALYSIS_CFG = ""    -- DLL reads this for analysis render config
+TRANSMORPHER_ENV_CFG = ""         -- DLL reads this for misc fog/far clip config
+
+-- ============================================================
+-- COMMAND TRACKING
+-- Persist morph commands into TransmorpherCharacterState so
+-- they survive /reload and character logout.
+-- ============================================================
+
+local function InitCharacterState()
+    if not TransmorpherCharacterState then
+        TransmorpherCharacterState = {
+            Items = {},
+            Morph = nil,
+            Scale = nil,
+            MountDisplay = nil,
+            PetDisplay = nil,
+            Mounts = {}, -- Per-mount morphs: [spellID] = displayID
+            MountHidden = false, -- Toggle for mount invisibility
+            HunterPetDisplay = nil,
+            HunterPetScale = nil,
+            EnchantMH = nil,
+            EnchantOH = nil,
+            TitleID = nil,
+            WeaponSets = {},
+            Forms = {},
+            SpellMorphs = {},
+            HiddenItems = {}, -- [slotId] = true
+        }
+    end
+    if not TransmorpherCharacterState.Items then TransmorpherCharacterState.Items = {} end
+    if not TransmorpherCharacterState.HiddenItems then TransmorpherCharacterState.HiddenItems = {} end
+    if not TransmorpherCharacterState.Mounts then TransmorpherCharacterState.Mounts = {} end
+    if not TransmorpherCharacterState.WeaponSets then TransmorpherCharacterState.WeaponSets = {} end
+    if not TransmorpherCharacterState.SpellMorphs then TransmorpherCharacterState.SpellMorphs = {} end
+end
+
+-- Helper: get weapon set key from equipped weapons
+local function GetWeaponSetKey()
+    local mainHand = GetInventoryItemLink("player", 16) or "0"
+    local offHand  = GetInventoryItemLink("player", 17) or "0"
+    return mainHand .. "|" .. offHand
+end
+ns.GetWeaponSetKey = GetWeaponSetKey
+
+local function GetSpellBookSpellId(spellBookIndex)
+    local bookType = BOOKTYPE_SPELL or "spell"
+    if type(GetSpellBookItemInfo) == "function" then
+        local spellType, spellId = GetSpellBookItemInfo(spellBookIndex, bookType)
+        if spellType == "SPELL" and spellId then
+            return tonumber(spellId)
+        end
+    end
+    if type(GetSpellLink) == "function" then
+        local link = GetSpellLink(spellBookIndex, bookType)
+        if link then
+            local spellId = tonumber(link:match("spell:(%d+)"))
+            if spellId and spellId > 0 then return spellId end
+        end
+    end
+    return nil
+end
+
+local function AddFlyoutSpellIds(flyoutId, seen, ids)
+    if not flyoutId or flyoutId <= 0 then return end
+    if type(GetFlyoutInfo) ~= "function" or type(GetFlyoutSlotInfo) ~= "function" then return end
+
+    local _, _, numSlots = GetFlyoutInfo(flyoutId)
+    if not numSlots or numSlots <= 0 then return end
+
+    for slot = 1, numSlots do
+        local spellId = GetFlyoutSlotInfo(flyoutId, slot)
+        spellId = tonumber(spellId)
+        if spellId and spellId > 0 and not seen[spellId] then
+            seen[spellId] = true
+            table.insert(ids, spellId)
+        end
+    end
+end
+
+local function GetPlayerSpellbookSpellIds()
+    local ids, seen = {}, {}
+    local bookType = BOOKTYPE_SPELL or "spell"
+    local numTabs = GetNumSpellTabs() or 0
+    for tab = 1, numTabs do
+        local _, _, offset, numSpells = GetSpellTabInfo(tab)
+        if offset and numSpells then
+            for i = 1, numSpells do
+                local index = offset + i
+                if type(GetSpellBookItemInfo) == "function" then
+                    local spellType, spellId = GetSpellBookItemInfo(index, bookType)
+                    spellId = tonumber(spellId)
+
+                    if spellType == "SPELL" and spellId and spellId > 0 and not seen[spellId] then
+                        seen[spellId] = true
+                        table.insert(ids, spellId)
+                    elseif spellType == "FLYOUT" and spellId and spellId > 0 then
+                        AddFlyoutSpellIds(spellId, seen, ids)
+                    end
+                else
+                    local spellId = GetSpellBookSpellId(index)
+                    if spellId and spellId > 0 and not seen[spellId] then
+                        seen[spellId] = true
+                        table.insert(ids, spellId)
+                    end
+                end
+            end
+        end
+    end
+    table.sort(ids)
+    return ids
+end
+
+local spellbookChunkTimer = CreateFrame("Frame")
+spellbookChunkTimer:Hide()
+spellbookChunkTimer.remaining = 0
+
+local spellbookDebounceTimer = CreateFrame("Frame")
+spellbookDebounceTimer:Hide()
+spellbookDebounceTimer.remaining = 0
+
+local pendingSpellbookChunks = nil
+local pendingSpellbookChunkIndex = 1
+local lastSyncedSpellbookSet = nil
+local pendingSpellbookSetAfterFlush = nil
+local spellbookSyncQueued = false
+
+local function BuildSpellbookSet(ids)
+    local set = {}
+    for _, id in ipairs(ids) do
+        set[id] = true
+    end
+    return set
+end
+
+local function BuildSpellbookSyncChunks(commands)
+    local chunks = {}
+    local current = ""
+    local maxLen = 3000
+
+    for _, cmd in ipairs(commands) do
+        if current == "" then
+            current = cmd
+        else
+            local mergedLen = string.len(current) + 1 + string.len(cmd)
+            if mergedLen > maxLen then
+                table.insert(chunks, current)
+                current = cmd
+            else
+                current = current .. "|" .. cmd
+            end
+        end
+    end
+
+    if current ~= "" then
+        table.insert(chunks, current)
+    end
+
+    return chunks
+end
+
+local function QueueSpellbookSync(commands)
+    table.insert(commands, "SPELL_PLAYER_BOOK_COMMIT")
+
+    pendingSpellbookChunks = BuildSpellbookSyncChunks(commands)
+    pendingSpellbookChunkIndex = 1
+
+    if pendingSpellbookChunks[1] then
+        ns.SendRawMorphCommand(pendingSpellbookChunks[1])
+        pendingSpellbookChunkIndex = 2
+    end
+
+    if pendingSpellbookChunkIndex <= #pendingSpellbookChunks then
+        spellbookChunkTimer.remaining = 0.05
+        spellbookChunkTimer:Show()
+    else
+        if pendingSpellbookSetAfterFlush then
+            lastSyncedSpellbookSet = pendingSpellbookSetAfterFlush
+            pendingSpellbookSetAfterFlush = nil
+        end
+        spellbookChunkTimer:Hide()
+    end
+end
+
+spellbookChunkTimer:SetScript("OnUpdate", function(self, elapsed)
+    self.remaining = self.remaining - elapsed
+    if self.remaining > 0 then return end
+
+    if not pendingSpellbookChunks or pendingSpellbookChunkIndex > #pendingSpellbookChunks then
+        if pendingSpellbookSetAfterFlush then
+            lastSyncedSpellbookSet = pendingSpellbookSetAfterFlush
+            pendingSpellbookSetAfterFlush = nil
+        end
+        self:Hide()
+        return
+    end
+
+    if TRANSMORPHER_CMD and TRANSMORPHER_CMD ~= "" then
+        self.remaining = 0.05
+        return
+    end
+
+    ns.SendRawMorphCommand(pendingSpellbookChunks[pendingSpellbookChunkIndex])
+    pendingSpellbookChunkIndex = pendingSpellbookChunkIndex + 1
+    self.remaining = 0.05
+end)
+
+function ns.SyncPlayerSpellbookVisibility(forceFull)
+    if not ns.IsMorpherReady() then return end
+
+    local spellIds = GetPlayerSpellbookSpellIds()
+    local currentSet = BuildSpellbookSet(spellIds)
+    local commands = {}
+
+    local requireFull = forceFull or (not lastSyncedSpellbookSet)
+    if not requireFull and lastSyncedSpellbookSet then
+        for spellId, _ in pairs(lastSyncedSpellbookSet) do
+            if not currentSet[spellId] then
+                requireFull = true
+                break
+            end
+        end
+    end
+
+    if requireFull then
+        table.insert(commands, "SPELL_PLAYER_BOOK_CLEAR")
+        for _, spellId in ipairs(spellIds) do
+            table.insert(commands, "SPELL_PLAYER_BOOK_ADD:" .. spellId)
+        end
+    else
+        for _, spellId in ipairs(spellIds) do
+            if not lastSyncedSpellbookSet[spellId] then
+                table.insert(commands, "SPELL_PLAYER_BOOK_ADD:" .. spellId)
+            end
+        end
+        if #commands == 0 then
+            return
+        end
+    end
+
+    QueueSpellbookSync(commands)
+    pendingSpellbookSetAfterFlush = currentSet
+end
+
+function ns.RequestPlayerSpellbookVisibilitySync(immediate)
+    if immediate then
+        spellbookSyncQueued = false
+        spellbookDebounceTimer:Hide()
+        ns.SyncPlayerSpellbookVisibility(false)
+        return
+    end
+
+    spellbookSyncQueued = true
+    spellbookDebounceTimer.remaining = 0.2
+    spellbookDebounceTimer:Show()
+end
+
+function ns.InvalidatePlayerSpellbookVisibilityCache()
+    lastSyncedSpellbookSet = nil
+    pendingSpellbookSetAfterFlush = nil
+    pendingSpellbookChunks = nil
+    pendingSpellbookChunkIndex = 1
+    spellbookChunkTimer:Hide()
+    spellbookSyncQueued = false
+    spellbookDebounceTimer:Hide()
+end
+
+spellbookDebounceTimer:SetScript("OnUpdate", function(self, elapsed)
+    if not spellbookSyncQueued then return end
+    self.remaining = self.remaining - elapsed
+    if self.remaining > 0 then return end
+    self:Hide()
+    spellbookSyncQueued = false
+    ns.SyncPlayerSpellbookVisibility(false)
+end)
+
+local function TrackMorphCommand(cmd)
+    local settings = ns.GetSettings()
+    if not settings.saveMorphState then return end
+    InitCharacterState()
+
+    for singleCmd in cmd:gmatch("[^|]+") do
+        local parts = {strsplit(":", singleCmd)}
+        local prefix = parts[1]
+
+        if prefix == "ITEM" and parts[2] and parts[3] then
+            local slotId = tonumber(parts[2])
+            local itemId = tonumber(parts[3])
+            if slotId then
+                if itemId == -1 then
+                    TransmorpherCharacterState.HiddenItems[slotId] = true
+                    if TransmorpherCharacterState.Items[slotId] == nil then
+                        TransmorpherCharacterState.Items[slotId] = -1
+                    end
+                else
+                    TransmorpherCharacterState.Items[slotId] = itemId
+                    TransmorpherCharacterState.HiddenItems[slotId] = nil
+                end
+            end
+
+        elseif prefix == "MORPH" and parts[2] then
+            local val = tonumber(parts[2])
+            TransmorpherCharacterState.Morph = (val and val > 0) and val or nil
+
+        elseif prefix == "SCALE" and parts[2] then
+            TransmorpherCharacterState.Scale = tonumber(parts[2])
+
+        elseif prefix == "MOUNT_MORPH" and parts[2] then
+            local mountMorphID = tonumber(parts[2])
+            if settings.saveMountMorph then
+                if mountMorphID and mountMorphID > 0 then
+                    TransmorpherCharacterState.MountHidden = false
+                    TransmorpherCharacterState.MountDisplay = mountMorphID
+                end
+            end
+        elseif prefix == "MOUNT_RESET" then
+            TransmorpherCharacterState.MountDisplay = nil
+            TransmorpherCharacterState.GroundMountDisplay = nil
+            TransmorpherCharacterState.GroundMountName = nil
+            TransmorpherCharacterState.FlyingMountDisplay = nil
+            TransmorpherCharacterState.FlyingMountName = nil
+            TransmorpherCharacterState.MountHidden = false
+            if TransmorpherCharacterState.Mounts then
+                wipe(TransmorpherCharacterState.Mounts)
+            end
+            ns.networkResetPending = true
+
+        elseif prefix == "PET_MORPH" and parts[2] then
+            if settings.savePetMorph then
+                TransmorpherCharacterState.PetDisplay = tonumber(parts[2])
+            end
+        elseif prefix == "PET_RESET" then
+            TransmorpherCharacterState.PetDisplay = nil
+            ns.networkResetPending = true
+
+        elseif prefix == "HPET_MORPH" and parts[2] then
+            if settings.saveCombatPetMorph or settings.saveHunterPetMorph then
+                TransmorpherCharacterState.HunterPetDisplay = tonumber(parts[2])
+            end
+        elseif prefix == "HPET_SCALE" and parts[2] then
+            if settings.saveCombatPetMorph or settings.saveHunterPetMorph then
+                TransmorpherCharacterState.HunterPetScale = tonumber(parts[2])
+            end
+        elseif prefix == "HPET_RESET" then
+            TransmorpherCharacterState.HunterPetDisplay = nil
+            TransmorpherCharacterState.HunterPetScale = nil
+            ns.networkResetPending = true
+
+        elseif prefix == "ENCHANT_MH" and parts[2] then
+            local val = tonumber(parts[2])
+            if val and val > 0 then TransmorpherCharacterState.EnchantMH = val end
+        elseif prefix == "ENCHANT_OH" and parts[2] then
+            local val = tonumber(parts[2])
+            if val and val > 0 then TransmorpherCharacterState.EnchantOH = val end
+        elseif prefix == "ENCHANT_RESET_MH" then
+            TransmorpherCharacterState.EnchantMH = nil
+            ns.networkResetPending = true
+        elseif prefix == "ENCHANT_RESET_OH" then
+            TransmorpherCharacterState.EnchantOH = nil
+            ns.networkResetPending = true
+        elseif prefix == "ENCHANT_RESET" then
+            TransmorpherCharacterState.EnchantMH = nil
+            TransmorpherCharacterState.EnchantOH = nil
+            ns.networkResetPending = true
+
+        elseif prefix == "TITLE" and parts[2] then
+            local val = tonumber(parts[2])
+            if val and val > 0 then TransmorpherCharacterState.TitleID = val end
+        elseif prefix == "TITLE_RESET" then
+            TransmorpherCharacterState.TitleID = nil
+            ns.networkResetPending = true
+        elseif prefix == "SPELL_MORPH" and parts[2] and parts[3] then
+            local sourceSpellId = tonumber(parts[2])
+            local targetSpellId = tonumber(parts[3])
+            if sourceSpellId and sourceSpellId > 0 then
+                if not TransmorpherCharacterState.SpellMorphs then TransmorpherCharacterState.SpellMorphs = {} end
+                if targetSpellId and targetSpellId > 0 then
+                    TransmorpherCharacterState.SpellMorphs[sourceSpellId] = targetSpellId
+                else
+                    TransmorpherCharacterState.SpellMorphs[sourceSpellId] = nil
+                end
+            end
+        elseif prefix == "SPELL_RESET" and parts[2] then
+            local sourceSpellId = tonumber(parts[2])
+            if sourceSpellId and sourceSpellId > 0 and TransmorpherCharacterState.SpellMorphs then
+                TransmorpherCharacterState.SpellMorphs[sourceSpellId] = nil
+            end
+        elseif prefix == "SPELL_RESET_ALL" then
+            if TransmorpherCharacterState.SpellMorphs then
+                wipe(TransmorpherCharacterState.SpellMorphs)
+            else
+                TransmorpherCharacterState.SpellMorphs = {}
+            end
+
+
+
+        elseif prefix == "RESET" and parts[2] then
+            if parts[2] == "ALL" then
+                if TransmorpherCharacterState and TransmorpherCharacterState.Items then
+                    for slotId, _ in pairs(TransmorpherCharacterState.Items) do
+                        local slotName = ns.equipSlotIdToSlot[slotId]
+                        if slotName then
+                            local nativeId = ns.GetEquippedItemForSlot(slotName) or 0
+                            ns.TrackUnmorphedSlot(slotId, nativeId)
+                        end
+                    end
+                end
+                ns.networkResetPending = true
+                -- Clear state in-place to preserve references
+                if TransmorpherCharacterState.Items then
+                    wipe(TransmorpherCharacterState.Items)
+                else
+                    TransmorpherCharacterState.Items = {}
+                end
+                TransmorpherCharacterState.Morph = nil
+                TransmorpherCharacterState.Scale = nil
+                TransmorpherCharacterState.MountDisplay = nil
+                TransmorpherCharacterState.PetDisplay = nil
+                TransmorpherCharacterState.MountHidden = false
+                if TransmorpherCharacterState.HiddenItems then
+                    wipe(TransmorpherCharacterState.HiddenItems)
+                else
+                    TransmorpherCharacterState.HiddenItems = {}
+                end
+                TransmorpherCharacterState.GroundMountDisplay = nil
+                TransmorpherCharacterState.GroundMountName = nil
+                TransmorpherCharacterState.FlyingMountDisplay = nil
+                TransmorpherCharacterState.FlyingMountName = nil
+                -- Clear per-mount morphs too
+                if TransmorpherCharacterState.Mounts then
+                    wipe(TransmorpherCharacterState.Mounts)
+                else
+                    TransmorpherCharacterState.Mounts = {}
+                end
+                TransmorpherCharacterState.HunterPetDisplay = nil
+                TransmorpherCharacterState.HunterPetScale = nil
+                TransmorpherCharacterState.EnchantMH = nil
+                TransmorpherCharacterState.EnchantOH = nil
+                TransmorpherCharacterState.TitleID = nil
+                if TransmorpherCharacterState.WeaponSets then
+                    wipe(TransmorpherCharacterState.WeaponSets)
+                else
+                    TransmorpherCharacterState.WeaponSets = {}
+                end
+
+                -- Preserve Forms and spell systems
+                if not TransmorpherCharacterState.Forms then TransmorpherCharacterState.Forms = {} end
+                if not TransmorpherCharacterState.SpellMorphs then TransmorpherCharacterState.SpellMorphs = {} end
+            else
+                local slotId = tonumber(parts[2])
+                if slotId then
+                    TransmorpherCharacterState.Items[slotId] = nil
+                    if TransmorpherCharacterState.HiddenItems then
+                        TransmorpherCharacterState.HiddenItems[slotId] = nil
+                    end
+                    if slotId == 16 or slotId == 17 then
+                        local setKey = GetWeaponSetKey()
+                        if TransmorpherCharacterState.WeaponSets and TransmorpherCharacterState.WeaponSets[setKey] then
+                            TransmorpherCharacterState.WeaponSets[setKey][slotId] = nil
+                        end
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ============================================================
+-- LOW-LEVEL COMMAND TRANSPORT
+-- ============================================================
+
+local function AppendCommand(cmd)
+    if ns.isShuttingDown then return end
+    if TRANSMORPHER_CMD == "" then
+        TRANSMORPHER_CMD = cmd
+    else
+        TRANSMORPHER_CMD = TRANSMORPHER_CMD .. "|" .. cmd
+    end
+end
+
+local morphBatchDepth = 0
+local morphBatchStatusDirty = false
+
+function ns.BeginMorphBatch()
+    morphBatchDepth = morphBatchDepth + 1
+end
+
+function ns.EndMorphBatch()
+    if morphBatchDepth <= 0 then return end
+    morphBatchDepth = morphBatchDepth - 1
+    if morphBatchDepth == 0 and morphBatchStatusDirty then
+        morphBatchStatusDirty = false
+        if ns.UpdateMorphStatusBar then ns.UpdateMorphStatusBar() end
+    end
+end
+
+-- Send a morph command (tracked in SavedVariables)
+function ns.SendMorphCommand(cmd)
+    if ns.isShuttingDown then return end
+    -- If a manual command is sent, clear the active loadout tracking.
+    -- This ensures that if the user manually changes a piece of gear,
+    -- the loadout system knows it's no longer perfectly matching the saved loadout.
+    if not ns.isApplyingLoadout then
+        ns.activeLoadoutUid = nil
+    end
+
+    TrackMorphCommand(cmd)
+    AppendCommand(cmd)
+
+    if morphBatchDepth > 0 then
+        morphBatchStatusDirty = true
+    else
+        if ns.UpdateMorphStatusBar then ns.UpdateMorphStatusBar() end
+    end
+
+    -- Sync with other players
+    if ns.BroadcastMorphState then
+        ns.BroadcastMorphState()
+    end
+end
+
+-- Send a raw signal to the DLL (SUSPEND/RESUME) without tracking state
+function ns.SendRawMorphCommand(cmd)
+    if ns.isShuttingDown then return end
+    AppendCommand(cmd)
+end
+
+-- ============================================================
+-- DLL STATUS
+-- ============================================================
+
+-- Track if DLL settings have been initialized
+local dllSettingsInitialized = false
+local dllInitRetryFrame = CreateFrame("Frame")
+dllInitRetryFrame:Hide()
+dllInitRetryFrame.elapsed = 0
+dllInitRetryFrame.startedAt = 0
+dllInitRetryFrame:SetScript("OnUpdate", function(self, elapsed)
+    if dllSettingsInitialized then
+        self:Hide()
+        return
+    end
+    self.elapsed = self.elapsed + elapsed
+    if self.elapsed < 0.5 then return end
+    self.elapsed = 0
+    if TRANSMORPHER_DLL_LOADED then
+        ns.InitializeDLLSettings()
+        if dllSettingsInitialized then
+            self:Hide()
+        end
+        return
+    end
+    if self.startedAt > 0 and (GetTime() - self.startedAt) > 60 then
+        self:Hide()
+    end
+end)
+
+function ns.IsMorpherReady()
+    if TRANSMORPHER_DLL_LOADED then
+        return true
+    else
+        return false
+    end
+end
+
+-- Initialize DLL settings (called once when DLL is first detected)
+function ns.InitializeDLLSettings()
+    if dllSettingsInitialized then return end
+    if not TRANSMORPHER_DLL_LOADED then
+        if not dllInitRetryFrame:IsShown() then
+            dllInitRetryFrame.elapsed = 0
+            dllInitRetryFrame.startedAt = GetTime()
+            dllInitRetryFrame:Show()
+        end
+        return
+    end
+    
+    local settings = ns.GetSettings()
+    
+    if not TransmorpherCharacterState then 
+        TransmorpherCharacterState = {} 
+    end
+
+    -- STATE RECOVERY: If SavedVariables were wiped, pull from DLL
+    local hasItems = next(TransmorpherCharacterState.Items or {}) ~= nil
+    local hasMorphData = TransmorpherCharacterState.Morph or hasItems
+    
+    if TRANSMORPHER_DLL_STATE and not hasMorphData then
+        TransmorpherCharacterState.Morph = TRANSMORPHER_DLL_STATE.morph
+        TransmorpherCharacterState.Scale = TRANSMORPHER_DLL_STATE.scale
+        TransmorpherCharacterState.MountDisplay = TRANSMORPHER_DLL_STATE.mount
+        TransmorpherCharacterState.EnchantMH = TRANSMORPHER_DLL_STATE.emh
+        TransmorpherCharacterState.EnchantOH = TRANSMORPHER_DLL_STATE.eoh
+        TransmorpherCharacterState.TitleID = TRANSMORPHER_DLL_STATE.title
+        TransmorpherCharacterState.Items = TransmorpherCharacterState.Items or {}
+        TransmorpherCharacterState.HiddenItems = TransmorpherCharacterState.HiddenItems or {}
+        TransmorpherCharacterState.SpellMorphs = TransmorpherCharacterState.SpellMorphs or {}
+        
+        for s, id in pairs(TRANSMORPHER_DLL_STATE.items) do
+            if id == 0 then
+                TransmorpherCharacterState.HiddenItems[s] = true
+            else
+                TransmorpherCharacterState.Items[s] = id
+            end
+        end
+        if TRANSMORPHER_DLL_STATE.spells then
+            for sourceSpellId, targetSpellId in pairs(TRANSMORPHER_DLL_STATE.spells) do
+                local source = tonumber(sourceSpellId)
+                local target = tonumber(targetSpellId)
+                if source and source > 0 and target and target > 0 then
+                    TransmorpherCharacterState.SpellMorphs[source] = target
+                end
+            end
+        end
+        
+        if ns.RestoreMorphedUI then
+            ns.RestoreMorphedUI()
+        end
+    end
+
+    -- Send all settings to DLL immediately. MSDF mode is startup-only and is persisted by the DLL for the next launch.
+    ns.SendRawMorphCommand("MSDF_MODE:" .. NormalizeHdFontMode(settings))
+    ns.SendRawMorphCommand("SET:DBW:0")
+    ns.SendRawMorphCommand("SET:META:" .. (settings.showMetamorphosis and "1" or "0"))
+    ns.SendRawMorphCommand("SET:SHAPE:" .. (settings.morphInShapeshift and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_ALL:" .. (settings.hideAllSpells and "1" or "0"))
+    ns.SendRawMorphCommand("SET:SHOW_OWN_SPELLS:" .. (settings.showOwnSpells and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_PRECAST:" .. (settings.hidePrecast and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_CAST:" .. (settings.hideCast and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_CHANNEL:" .. (settings.hideChannel and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AURA_START:" .. (settings.hideAuraStart and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AURA_END:" .. (settings.hideAuraEnd and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_IMPACT:" .. (settings.hideImpact and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_IMPACT_CASTER:" .. (settings.hideImpactCaster and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_IMPACT_TARGET:" .. (settings.hideTargetImpact and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AREA_INSTANT:" .. (settings.hideAreaInstant and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AREA_IMPACT:" .. (settings.hideAreaImpact and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_AREA_PERSISTENT:" .. (settings.hideAreaPersistent and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_MISSILE:" .. (settings.hideMissile and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_MISSILE_MARKER:" .. (settings.hideMissileMarker and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_SOUND_MISSILE:" .. (settings.hideSoundMissile and "1" or "0"))
+    ns.SendRawMorphCommand("SET:HIDE_SOUND_EVENT:" .. (settings.hideSoundEvent and "1" or "0"))
+    
+    -- Sync White Card (Protection) List
+    ns.SendRawMorphCommand("SPELL_WHITE_CLEAR")
+    if settings.whiteCardSpells then
+        for id, _ in pairs(settings.whiteCardSpells) do
+            ns.SendRawMorphCommand("SPELL_WHITE_CARD:" .. id)
+        end
+    end
+    ns.SyncOptimizationTierProtection()
+    ns.SyncPlayerSpellbookVisibility(true)
+
+    if ns.QueueWorldAnalysisSync then ns.QueueWorldAnalysisSync() end
+    if ns.QueueWorldEnvironmentSync then ns.QueueWorldEnvironmentSync() end
+    
+
+    
+    dllSettingsInitialized = true
+    dllInitRetryFrame:Hide()
+    
+    -- Sync all saved state to the DLL immediately upon initialization
+    if ns.SendFullMorphState then
+        ns.SendFullMorphState()
+    end
+
+    if type(Log) == "function" then
+        Log("DLL settings initialized: DBW=0, META=%s, SHAPE=%s",
+            settings.showMetamorphosis and "1" or "0",
+            settings.morphInShapeshift and "1" or "0")
+    end
+end
+
+-- Helper: Re-apply pet morphs from saved state
+function ns.ApplyPetMorphs()
+    local settings = ns.GetSettings()
+    if not settings.saveMorphState or not TransmorpherCharacterState then return end
+
+    local cmdQueue = {}
+    -- Combat Pet
+    if TransmorpherCharacterState.HunterPetDisplay and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_MORPH:" .. TransmorpherCharacterState.HunterPetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetScale and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_SCALE:" .. TransmorpherCharacterState.HunterPetScale)
+    end
+    -- Non-combat Pet
+    if TransmorpherCharacterState.PetDisplay and settings.savePetMorph then
+        table.insert(cmdQueue, "PET_MORPH:" .. TransmorpherCharacterState.PetDisplay)
+    end
+
+    if #cmdQueue > 0 then
+        ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
+    end
+end
+
+-- ============================================================
+-- FULL STATE RESTORE
+-- Sends all saved morph state to the DLL (used on login/zone change).
+-- ============================================================
+
+-- Flag: when true, next SendFullMorphState prepends RESET:ALL
+ns.needsCharacterReset = false
+
+function ns.SendFullMorphState()
+    local settings = ns.GetSettings()
+
+    if not settings.saveMorphState then
+        if ns.needsCharacterReset then
+            ns.SendRawMorphCommand("RESET:ALL")
+            ns.needsCharacterReset = false
+        end
+        return
+    end
+    if not TransmorpherCharacterState then return end
+
+    local cmdQueue = {}
+
+    -- Sync settings to DLL first
+    table.insert(cmdQueue, "SET:DBW:0")
+    table.insert(cmdQueue, "SET:META:" .. (settings.showMetamorphosis and "1" or "0"))
+    table.insert(cmdQueue, "SET:SHAPE:" .. (settings.morphInShapeshift and "1" or "0"))
+
+    -- Character reset if needed
+    if ns.needsCharacterReset then
+        table.insert(cmdQueue, "RESET:ALL")
+        ns.needsCharacterReset = false
+    end
+
+    local activeMorph = ns.currentFormMorph or TransmorpherCharacterState.Morph
+    local hasActiveFormMorph = ns.currentFormMorph and ns.currentFormMorph > 0
+
+    if hasActiveFormMorph then
+        ns.morphSuspended = false
+        table.insert(cmdQueue, "RESUME")
+    end
+
+    -- If suspended, still send morph data so DLL knows what to resume to
+    if (ns.IsModelChangingForm() and not hasActiveFormMorph) or (ns.dbwSuspended and not hasActiveFormMorph) or ns.vehicleSuspended then
+        table.insert(cmdQueue, "SUSPEND")
+
+        if TransmorpherCharacterState.Scale then
+            table.insert(cmdQueue, "SCALE:" .. TransmorpherCharacterState.Scale)
+        end
+        if activeMorph then
+            table.insert(cmdQueue, "MORPH:" .. activeMorph)
+        end
+        if TransmorpherCharacterState.MountDisplay and settings.saveMountMorph then
+            table.insert(cmdQueue, "MOUNT_MORPH:" .. TransmorpherCharacterState.MountDisplay)
+        end
+        if TransmorpherCharacterState.Items then
+            for slot, item in pairs(TransmorpherCharacterState.Items) do
+                table.insert(cmdQueue, "ITEM:" .. slot .. ":" .. item)
+            end
+        end
+        local effectiveSpellMorphs = ns.GetEffectiveSpellMorphPairs and ns.GetEffectiveSpellMorphPairs() or TransmorpherCharacterState.SpellMorphs
+        if effectiveSpellMorphs then
+            for sourceSpellId, targetSpellId in pairs(effectiveSpellMorphs) do
+                if sourceSpellId and targetSpellId and sourceSpellId > 0 and targetSpellId > 0 then
+                    table.insert(cmdQueue, "SPELL_MORPH:" .. sourceSpellId .. ":" .. targetSpellId)
+                end
+            end
+        end
+
+        if #cmdQueue > 0 then
+            ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
+        end
+        return
+    end
+
+    -- Force RESUME if settings allow morph in shapeshift
+    if settings.morphInShapeshift and (GetShapeshiftForm() > 0) then
+        ns.morphSuspended = false
+        table.insert(cmdQueue, "RESUME")
+    end
+    if ns.HasDBWProc() then
+        ns.dbwSuspended = false
+        table.insert(cmdQueue, "RESUME")
+    end
+
+    -- Build morph data
+    if TransmorpherCharacterState.Scale then
+        table.insert(cmdQueue, "SCALE:" .. TransmorpherCharacterState.Scale)
+    end
+    if activeMorph then
+        table.insert(cmdQueue, "MORPH:" .. activeMorph)
+    end
+
+    -- Handle Mount Morph (single per-character mount morph)
+    if settings.saveMountMorph then
+        local mountMorph = TransmorpherCharacterState.MountDisplay
+        if not TransmorpherCharacterState.MountHidden then
+            if TransmorpherCharacterState.MountDisplay == -1 then
+                TransmorpherCharacterState.MountDisplay = nil
+            end
+            if mountMorph == -1 then
+                mountMorph = nil
+            end
+        end
+        
+        -- Override with -1 ONLY if explicitly hidden by the eye button
+        if TransmorpherCharacterState.MountHidden then
+            mountMorph = -1
+        end
+        
+        if IsMounted() then
+            table.insert(cmdQueue, "SET:MOUNTED:1")
+        end
+
+        if mountMorph then
+            table.insert(cmdQueue, "MOUNT_MORPH:" .. mountMorph)
+        end
+    end
+
+    if TransmorpherCharacterState.PetDisplay and settings.savePetMorph then
+        table.insert(cmdQueue, "PET_MORPH:" .. TransmorpherCharacterState.PetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetDisplay and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_MORPH:" .. TransmorpherCharacterState.HunterPetDisplay)
+    end
+    if TransmorpherCharacterState.HunterPetScale and (settings.saveCombatPetMorph or settings.saveHunterPetMorph) then
+        table.insert(cmdQueue, "HPET_SCALE:" .. TransmorpherCharacterState.HunterPetScale)
+    end
+    if TransmorpherCharacterState.EnchantMH then
+        table.insert(cmdQueue, "ENCHANT_MH:" .. TransmorpherCharacterState.EnchantMH)
+    end
+    if TransmorpherCharacterState.EnchantOH then
+        table.insert(cmdQueue, "ENCHANT_OH:" .. TransmorpherCharacterState.EnchantOH)
+    end
+    if TransmorpherCharacterState.TitleID then
+        table.insert(cmdQueue, "TITLE:" .. TransmorpherCharacterState.TitleID)
+    end
+    if TransmorpherCharacterState.Items then
+        for slot, item in pairs(TransmorpherCharacterState.Items) do
+            local sendId = item
+            if TransmorpherCharacterState.HiddenItems and TransmorpherCharacterState.HiddenItems[slot] then
+                sendId = -1
+            end
+            table.insert(cmdQueue, "ITEM:" .. slot .. ":" .. sendId)
+        end
+    end
+    -- Also handle hidden slots that are NOT morphed
+    if TransmorpherCharacterState.HiddenItems then
+        for slot, isHidden in pairs(TransmorpherCharacterState.HiddenItems) do
+            if isHidden and not TransmorpherCharacterState.Items[slot] then
+                table.insert(cmdQueue, "ITEM:" .. slot .. ":-1")
+            end
+        end
+    end
+    local effectiveSpellMorphs = ns.GetEffectiveSpellMorphPairs and ns.GetEffectiveSpellMorphPairs() or TransmorpherCharacterState.SpellMorphs
+    if effectiveSpellMorphs then
+        for sourceSpellId, targetSpellId in pairs(effectiveSpellMorphs) do
+            if sourceSpellId and targetSpellId and sourceSpellId > 0 and targetSpellId > 0 then
+                table.insert(cmdQueue, "SPELL_MORPH:" .. sourceSpellId .. ":" .. targetSpellId)
+            end
+        end
+    end
+
+
+
+    -- Optimization Settings (Granular)
+    table.insert(cmdQueue, "SET:HIDE_ALL:" .. (settings.hideAllSpells and "1" or "0"))
+    table.insert(cmdQueue, "SET:SHOW_OWN_SPELLS:" .. (settings.showOwnSpells and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_PRECAST:" .. (settings.hidePrecast and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_CAST:" .. (settings.hideCast and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_CHANNEL:" .. (settings.hideChannel and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AURA_START:" .. (settings.hideAuraStart and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AURA_END:" .. (settings.hideAuraEnd and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_IMPACT:" .. (settings.hideImpact and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_IMPACT_CASTER:" .. (settings.hideImpactCaster and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_IMPACT_TARGET:" .. (settings.hideTargetImpact and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AREA_INSTANT:" .. (settings.hideAreaInstant and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AREA_IMPACT:" .. (settings.hideAreaImpact and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_AREA_PERSISTENT:" .. (settings.hideAreaPersistent and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_MISSILE:" .. (settings.hideMissile and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_MISSILE_MARKER:" .. (settings.hideMissileMarker and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_SOUND_MISSILE:" .. (settings.hideSoundMissile and "1" or "0"))
+    table.insert(cmdQueue, "SET:HIDE_SOUND_EVENT:" .. (settings.hideSoundEvent and "1" or "0"))
+
+    -- Protection Whitelist (White Card)
+    table.insert(cmdQueue, "SPELL_WHITE_CLEAR")
+    if settings.whiteCardSpells then
+        for id, _ in pairs(settings.whiteCardSpells) do
+            table.insert(cmdQueue, "SPELL_WHITE_CARD:" .. id)
+        end
+    end
+    local tierOptions = ns.optimizationTierOptions or {}
+    for _, tier in ipairs(tierOptions) do
+        table.insert(cmdQueue, "SET:PROTECTED_TIER:" .. tier.key .. ":" .. (settings[tier.settingKey] and "1" or "0"))
+    end
+
+    if #cmdQueue > 0 then
+        ns.SendRawMorphCommand(table.concat(cmdQueue, "|"))
+    end
+
+    ns.SyncPlayerSpellbookVisibility(true)
+end

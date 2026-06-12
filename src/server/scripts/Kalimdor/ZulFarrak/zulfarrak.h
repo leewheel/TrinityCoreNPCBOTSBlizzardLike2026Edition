@@ -25,12 +25,17 @@
 
 enum ZFEntries
 {
-    ENTRY_ZUM_RAH       = 7271,
-    ENTRY_BLY           = 7604,
-    ENTRY_RAVEN         = 7605,
-    ENTRY_ORO           = 7606,
-    ENTRY_WEEGLI        = 7607,
-    ENTRY_MURTA         = 7608,
+    ENTRY_ZUM_RAH            = 7271,
+    ENTRY_BLY                = 7604,
+    ENTRY_RAVEN              = 7605,
+    ENTRY_ORO                = 7606,
+    ENTRY_WEEGLI             = 7607,
+    ENTRY_MURTA              = 7608,
+
+    ENTRY_SHADOWPRIEST_SEZZZIZ = 7275,
+    ENTRY_SANDFURY_ZEALOT      = 8877,
+    ENTRY_SANDFURY_ACOLYTE     = 8876,
+    ENTRY_NEKRUM_GUTCHEWER     = 7796,
 
     GO_END_DOOR         = 146084,
 
@@ -54,6 +59,10 @@ enum ZFPyramidPhases
     PYRAMID_PRE_WAVE_3,
     PYRAMID_WAVE_3,
     PYRAMID_KILLED_ALL_TROLLS,
+    PYRAMID_MOVED_DOWNSTAIRS,
+    PYRAMID_DESTROY_GATES,
+    PYRAMID_GATES_DESTROYED,
+    PYRAMID_DONE,
 };
 
 template <class AI, class T>

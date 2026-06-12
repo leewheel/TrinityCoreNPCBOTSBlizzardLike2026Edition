@@ -41,6 +41,7 @@ enum STBossIds
 enum STCreatureIds
 {
     NPC_AVATAR_OF_HAKKAR        = 8443,
+    NPC_SHADE_OF_HAKKAR         = 8440,
     NPC_JAMMALAN_THE_PROPHET    = 5710,
     NPC_DREAMSCYTHE             = 5721,
     NPC_WEAVER                  = 5720,

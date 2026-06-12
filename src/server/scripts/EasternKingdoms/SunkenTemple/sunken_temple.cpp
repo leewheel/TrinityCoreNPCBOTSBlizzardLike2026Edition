@@ -148,10 +148,42 @@ class spell_sunken_temple_hex_of_jammalan_transform : public AuraScript
     }
 };
 
+// 12346 - Awaken the Soulflayer (using Idol of Hakkar)
+enum SoulflayerMisc
+{
+    SPELL_AWAKEN_SOULFLAYER        = 12346,
+};
+
+class spell_sunken_temple_awaken_soulflayer : public SpellScript
+{
+    PrepareSpellScript(spell_sunken_temple_awaken_soulflayer);
+
+    void HandleSendEvent(SpellEffIndex effIndex)
+    {
+        PreventHitDefaultEffect(effIndex);
+        InstanceScript* instanceScript = GetCaster()->GetInstanceScript();
+        if (!instanceScript || instanceScript->GetBossState(BOSS_AVATAR_OF_HAKKAR) != NOT_STARTED)
+            return;
+
+        Map* map = GetCaster()->FindMap();
+        if (!map)
+            return;
+
+        map->SummonCreature(NPC_SHADE_OF_HAKKAR, Position(-466.795f, 272.863f, -90.447f, 1.57f));
+        instanceScript->SetBossState(BOSS_AVATAR_OF_HAKKAR, IN_PROGRESS);
+    }
+
+    void Register() override
+    {
+        OnEffectHit += SpellEffectFn(spell_sunken_temple_awaken_soulflayer::HandleSendEvent, EFFECT_0, SPELL_EFFECT_SEND_EVENT);
+    }
+};
+
 void AddSC_sunken_temple()
 {
     new at_malfurion_stormrage();
     new go_atalai_statue();
     RegisterSpellScript(spell_sunken_temple_hex_of_jammalan);
     RegisterSpellScript(spell_sunken_temple_hex_of_jammalan_transform);
+    RegisterSpellScript(spell_sunken_temple_awaken_soulflayer);
 }

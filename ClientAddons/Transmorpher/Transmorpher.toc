@@ -1,0 +1,61 @@
+## Interface: 30300
+## Author: Kirazul
+## Title: Transmorpher
+## Notes: Client-side Transmog system for WotLK 3.3.5a with optional multiplayer sync. Requires dinput8.dll (or Universal Proxy). v2.0.0.
+## SavedVariables: TransmorpherSavedLooks, TransmorpherMorphFavorites, TransmorpherSettings, TransmorpherLoadoutsAccount
+## SavedVariablesPerCharacter: TransmorpherCharacterState, TransmorpherSettingsPerChar
+## Version: 2.0.0
+
+db\ItemsDB.lua
+db\ItemsAPI.lua
+db\MountsDB.lua
+db\PetsDB.lua
+db\HunterPetsDB.lua
+db\CreatureDisplayDB.lua
+db\EnchantsDB.lua
+db\PreviewSetupDB.lua
+db\PreviewSetupAPI.lua
+db\ItemSetsDB.lua
+
+frames\QueryItem.lua
+frames\WowheadURL.lua
+frames\DressingRoom.lua
+frames\PreviewList.lua
+frames\ListFrame.lua
+frames\SetsTab.lua
+
+db\TitlesDB.lua
+
+Core\Constants.lua
+Core\Utils.lua
+Core\LoadoutCodec.lua
+Core\DLLBridge.lua
+Core\State.lua
+Core\MountManager.lua
+UI\GlowSystem.lua
+UI\MainFrame.lua
+UI\DressingRoomSetup.lua
+UI\Slots.lua
+UI\SpecialSlots.lua
+UI\EyeToggle.lua
+UI\EnchantSlots.lua
+UI\BottomButtons.lua
+
+UI\Tabs\PreviewTab.lua
+UI\Tabs\LoadoutsTab.lua
+UI\Tabs\MorphTab.lua
+UI\Tabs\MountsTab.lua
+UI\Tabs\PetsTab.lua
+UI\Tabs\CombatPetsTab.lua
+UI\Tabs\SettingsTab.lua
+UI\WorldEnvironment.lua
+UI\WorldAnalysis.lua
+UI\Tabs\MiscTab.lua
+UI\Tabs\FormsTab.lua
+UI\Tabs\SpellsTab.lua
+
+Core\P2PSync.lua
+Core\EventLoop.lua
+Core\SlashCommands.lua
+UI\MinimapButton.lua
+UI\PaperdollButton.lua
