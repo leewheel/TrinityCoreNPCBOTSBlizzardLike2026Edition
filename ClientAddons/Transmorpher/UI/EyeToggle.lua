@@ -71,7 +71,7 @@ local function CreateEyeButton(slot, isSpecial)
                     parentSlot.isHiddenSlot = true
                     ns.UpdateSpecialSlots()
                     ns.SendFullMorphState()
-                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Mount hidden!")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r：坐骑已隐藏！")
                 end
             else
                 local equipSlotId = ns.slotToEquipSlotId[self.slotName]
@@ -96,7 +96,7 @@ local function CreateEyeButton(slot, isSpecial)
                     parentSlot.isMorphed = true
                     ns.ShowMorphGlow(parentSlot)
                     ns.SendFullMorphState()
-                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..self.slotName.." hidden!")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r："..self.slotName.." 已隐藏！")
                 end
             end
             self.isHidden = true
@@ -117,7 +117,7 @@ local function CreateEyeButton(slot, isSpecial)
                     parentSlot.isHiddenSlot = false
                     ns.UpdateSpecialSlots()
                     ns.SendFullMorphState()
-                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Mount appearance restored!")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r：坐骑外观已恢复！")
                 end
             else
                 local equipSlotId = ns.slotToEquipSlotId[self.slotName]
@@ -140,14 +140,14 @@ local function CreateEyeButton(slot, isSpecial)
                         parentSlot.isMorphed = true
                         parentSlot.morphedItemId = restoreId
                         ns.ShowMorphGlow(parentSlot)
-                        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..self.slotName.." morph restored!")
+                        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r："..self.slotName.." 幻化已恢复！")
                     else
                         parentSlot.isMorphed = false
                         parentSlot.morphedItemId = nil
                         ns.HideMorphGlow(parentSlot)
                         local equippedId = ns.GetEquippedItemForSlot(self.slotName)
                         if equippedId then parentSlot:SetItem(equippedId) end
-                        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..self.slotName.." restored!")
+                        SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r："..self.slotName.." 已恢复！")
                     end
                     ns.SendFullMorphState()
                 end

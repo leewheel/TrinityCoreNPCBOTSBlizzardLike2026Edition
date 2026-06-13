@@ -96,7 +96,7 @@ local STATE_CHUNK_TTL = 12
 if RegisterAddonMessagePrefix then
     local ok = RegisterAddonMessagePrefix(PREFIX)
     if not ok then
-        DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842<TM P2P>|r: ERROR: Failed to register Addon Prefix!")
+        DEFAULT_CHAT_FRAME:AddMessage("|cffF5C842<TM P2P>|r：错误：注册Addon前缀失败！")
     end
 end
 
@@ -312,12 +312,12 @@ end
 --- Returns true if a group channel was used.
 local function SendToGroupAndGuild(msg, useChannel)
     local sentGroup = false
-    if IsInRaid() then
+    if GetNumRaidMembers() > 0 then
         sentGroup = TrySendAddon(PREFIX, msg, "RAID") or sentGroup
-    elseif IsInGroup() then
+    elseif GetNumPartyMembers() > 0 then
         sentGroup = TrySendAddon(PREFIX, msg, "PARTY") or sentGroup
     end
-    if IsInGuild() then
+    if GetGuildInfo("player") then
         TrySendAddon(PREFIX, msg, "GUILD")
     end
     
@@ -393,14 +393,14 @@ local function InOurGroup(name)
     if target == "" then return false end
     if target == NormalizePlayerName(UnitName("player")) then return true end
 
-    if IsInRaid() then
+    if GetNumRaidMembers() > 0 then
         for i = 1, 40 do
             local member = UnitName("raid" .. i)
             if member and NormalizePlayerName(member) == target then
                 return true
             end
         end
-    elseif IsInGroup() then
+    elseif GetNumPartyMembers() > 0 then
         for i = 1, 4 do
             local member = UnitName("party" .. i)
             if member and NormalizePlayerName(member) == target then
@@ -413,7 +413,7 @@ end
 
 local function ForEachGroupMember(callback)
     if not callback then return end
-    if IsInRaid() then
+    if GetNumRaidMembers() > 0 then
         for i = 1, 40 do
             local unit = "raid" .. i
             local member = UnitName(unit)
@@ -421,7 +421,7 @@ local function ForEachGroupMember(callback)
                 callback(member)
             end
         end
-    elseif IsInGroup() then
+    elseif GetNumPartyMembers() > 0 then
         for i = 1, 4 do
             local unit = "party" .. i
             local member = UnitName(unit)

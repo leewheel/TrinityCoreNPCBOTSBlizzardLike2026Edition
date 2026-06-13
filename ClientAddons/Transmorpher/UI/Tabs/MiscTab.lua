@@ -53,12 +53,12 @@ local function CreateMiscSubTabBtn(key, text, registerWithLayout)
     return btn
 end
 
-local btnEnv = CreateMiscSubTabBtn("env", "Environment")
-local btnAtmosphere = CreateMiscSubTabBtn("atmosphere", "Atmosphere")
-local btnAnalysis = CreateMiscSubTabBtn("analysis", "Analysis")
-local btnTitles = CreateMiscSubTabBtn("titles", "Titles")
-local btnHdFont = CreateMiscSubTabBtn("hd", "HD Font")
-local btnOpt = CreateMiscSubTabBtn("optimization", "Optimization")
+local btnEnv = CreateMiscSubTabBtn("env", "环境")
+local btnAtmosphere = CreateMiscSubTabBtn("atmosphere", "氛围")
+local btnAnalysis = CreateMiscSubTabBtn("analysis", "分析")
+local btnTitles = CreateMiscSubTabBtn("titles", "称号")
+local btnHdFont = CreateMiscSubTabBtn("hd", "高清字体")
+local btnOpt = CreateMiscSubTabBtn("optimization", "优化")
 
 local function LayoutMiscSubTabs()
     local totalWidth = subTabBar:GetWidth() or 0
@@ -123,11 +123,11 @@ optimizationPanel = optPanel
 local optSubTabBar = CreateFrame("Frame", nil, optPanel)
 optSubTabBar:SetSize(320, 24); optSubTabBar:SetPoint("TOPLEFT", 4, -4)
 
-local btnOptGeneral = CreateMiscSubTabBtn(1, "General Optimization", false)
+local btnOptGeneral = CreateMiscSubTabBtn(1, "通用优化", false)
 btnOptGeneral:SetParent(optSubTabBar); btnOptGeneral:SetPoint("LEFT", 0, 0); btnOptGeneral:SetSize(140, 24)
 btnOptGeneral:SetScript("OnClick", function() ShowOptSubTab(1) end)
 
-local btnOptProtectedFile = CreateMiscSubTabBtn(2, "Protected File", false)
+local btnOptProtectedFile = CreateMiscSubTabBtn(2, "基础保护列表", false)
 btnOptProtectedFile:SetParent(optSubTabBar); btnOptProtectedFile:SetPoint("LEFT", btnOptGeneral, "RIGHT", 4, 0); btnOptProtectedFile:SetSize(110, 24)
 btnOptProtectedFile:SetScript("OnClick", function() ShowOptSubTab(2) end)
 
@@ -153,19 +153,19 @@ optCard:SetBackdrop({bgFile="Interface\\Buttons\\WHITE8x8", edgeFile="Interface\
 optCard:SetBackdropColor(0.05, 0.055, 0.07, 0.93); optCard:SetBackdropBorderColor(0.56, 0.47, 0.20, 0.78)
 
 local optTitle = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
-optTitle:SetPoint("TOPLEFT", 12, -12); optTitle:SetText("|cffF5C842Spell Visibility & Optimization|r")
+optTitle:SetPoint("TOPLEFT", 12, -12); optTitle:SetText("|cffF5C842法术可见度与优化|r")
 
 local optDesc = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-optDesc:SetPoint("TOPLEFT", optTitle, "BOTTOMLEFT", 0, -4); optDesc:SetText("Toggle spell effects globally to maximize performance. Raid tiers on the right extend the always-active protected base list."); optDesc:SetTextColor(0.7, 0.7, 0.7)
+optDesc:SetPoint("TOPLEFT", optTitle, "BOTTOMLEFT", 0, -4); optDesc:SetText("全局切换法术效果以最大化性能。右侧的副本层级设置可扩展始终激活的基础保护列表。"); optDesc:SetTextColor(0.7, 0.7, 0.7)
 
 local optWarning = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
 optWarning:SetPoint("TOPLEFT", optDesc, "BOTTOMLEFT", 0, -2)
-optWarning:SetText("|cffFF4444Warning:|r Some settings may hide boss mechanics even with active filters.")
+optWarning:SetText("|cffFF4444警告：|r 即使启用了过滤器，某些设置仍可能隐藏首领机制。")
 optWarning:SetTextColor(0.9, 0.3, 0.3)
     
     local optBenefit = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     optBenefit:SetPoint("TOPLEFT", optWarning, "BOTTOMLEFT", 0, -6)
-    optBenefit:SetText("|cff44ff44This optimization provides a massive FPS boost in raids and crowded areas.|r")
+    optBenefit:SetText("|cff44ff44此项优化可在团队副本和拥挤区域大幅提升帧数。|r")
 
 local optimizationCheckboxes = {}
 
@@ -199,7 +199,7 @@ local function CreateOptCheckbox(name, label, tooltip, settingKey, cmdPrefix)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText(label, 1, 0.82, 0)
         GameTooltip:AddLine(tooltip, 0.8, 0.8, 0.8, true)
-        GameTooltip:AddLine("\n|cffF5C842Note:|r Affects all units globally.", 0.6, 0.6, 0.6, true)
+        GameTooltip:AddLine("\n|cffF5C842注意：|r 全局影响所有单位。", 0.6, 0.6, 0.6, true)
         GameTooltip:Show()
     end)
     cb:SetScript("OnLeave", function() GameTooltip:Hide() end)
@@ -211,10 +211,10 @@ end
 
 
 
-    local cbHideAll = CreateOptCheckbox("HideAll", "|cffFF4444[MASTER] Hide ALL Spells|r", "Completely disables all spell visuals globally for peak FPS.", "hideAllSpells", "HIDE_ALL")
+    local cbHideAll = CreateOptCheckbox("HideAll", "|cffFF4444[主控] 隐藏所有法术|r", "完全禁用所有法术视觉效果以获得最高帧数。", "hideAllSpells", "HIDE_ALL")
     cbHideAll:SetPoint("TOPLEFT", 16, -80)
 
-    local cbShowOwn = CreateOptCheckbox("ShowOwn", "|cff44ff88Show Spellbook Spells|r", "Keeps spells found in your current spellbook visible even when optimization is active. Morphed versions of those spellbook spells also stay visible.", "showOwnSpells", "SHOW_OWN_SPELLS")
+    local cbShowOwn = CreateOptCheckbox("ShowOwn", "|cff44ff88显示法术书法术|r", "即使优化开启，也保持法术书中的法术可见。这些法术的幻化版本也将保持可见。", "showOwnSpells", "SHOW_OWN_SPELLS")
     cbShowOwn:SetPoint("LEFT", cbHideAll, "RIGHT", 170, 0)
     
     local sep1 = optCard:CreateTexture(nil, "ARTWORK")
@@ -227,26 +227,26 @@ local rowH = 20
 local secGap = 20
 
 local sub1 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub1:SetPoint("TOPLEFT", 18, yPos1); sub1:SetText("|cffA3A3A3Casting & Auras|r")
+sub1:SetPoint("TOPLEFT", 18, yPos1); sub1:SetText("|cffA3A3A3施法与光环|r")
 yPos1 = yPos1 - 18
 
-CreateOptCheckbox("HidePre", "Pre-Cast Hand Glows", "Hides hand glows before a spell launches.", "hidePrecast", "HIDE_PRECAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
-CreateOptCheckbox("HideCast", "Casting Animations", "Hides main character casting visuals.", "hideCast", "HIDE_CAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
-CreateOptCheckbox("HideChan", "Channeled Beams", "Hides beams like Mind Flay or Drain Life.", "hideChannel", "HIDE_CHANNEL"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
+CreateOptCheckbox("HidePre", "施法前手势光效", "隐藏法术释放前的手部光效。", "hidePrecast", "HIDE_PRECAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideCast", "施法动画", "隐藏角色施法视觉效果。", "hideCast", "HIDE_CAST"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideChan", "引导光束", "隐藏如精神鞭笞或生命虹吸等引导光束。", "hideChannel", "HIDE_CHANNEL"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
 
 local sub2 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub2:SetPoint("TOPLEFT", 18, yPos1); sub2:SetText("|cffA3A3A3Aura Application|r")
+sub2:SetPoint("TOPLEFT", 18, yPos1); sub2:SetText("|cffA3A3A3光环应用|r")
 yPos1 = yPos1 - 18
 
-CreateOptCheckbox("HideAuraS", "Aura Apply (Start)", "Hides visuals triggered when an aura is applied.", "hideAuraStart", "HIDE_AURA_START"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
-CreateOptCheckbox("HideAuraE", "Aura Remove (End)", "Hides visuals triggered when an aura expires.", "hideAuraEnd", "HIDE_AURA_END"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
+CreateOptCheckbox("HideAuraS", "光环施加（开始）", "隐藏光环施加时触发的视觉效果。", "hideAuraStart", "HIDE_AURA_START"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideAuraE", "光环移除（结束）", "隐藏光环到期时触发的视觉效果。", "hideAuraEnd", "HIDE_AURA_END"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - secGap
 
 local sub3 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub3:SetPoint("TOPLEFT", 18, yPos1); sub3:SetText("|cffA3A3A3Impacts (Self)|r")
+sub3:SetPoint("TOPLEFT", 18, yPos1); sub3:SetText("|cffA3A3A3命中效果（自身）|r")
 yPos1 = yPos1 - 18
 
-CreateOptCheckbox("HideImpG", "Hit (Hand Effect)", "Hides generic hit effects usually attached to hands.", "hideImpact", "HIDE_IMPACT"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
-CreateOptCheckbox("HideImpC", "Impact (Caster)", "Hides caster-side impact visuals.", "hideImpactCaster", "HIDE_IMPACT_CASTER"):SetPoint("TOPLEFT", col1X, yPos1)
+CreateOptCheckbox("HideImpG", "命中（手部效果）", "隐藏通常附着在手部的通用命中效果。", "hideImpact", "HIDE_IMPACT"):SetPoint("TOPLEFT", col1X, yPos1); yPos1 = yPos1 - rowH
+CreateOptCheckbox("HideImpC", "命中（施法者）", "隐藏施法者侧的命中视觉效果。", "hideImpactCaster", "HIDE_IMPACT_CASTER"):SetPoint("TOPLEFT", col1X, yPos1)
 
 
 -- Column 2
@@ -254,33 +254,33 @@ CreateOptCheckbox("HideImpC", "Impact (Caster)", "Hides caster-side impact visua
     local yPos2 = -120
 
 local sub4 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub4:SetPoint("TOPLEFT", col2X - 4, yPos2); sub4:SetText("|cffA3A3A3World & Target Impacts|r")
+sub4:SetPoint("TOPLEFT", col2X - 4, yPos2); sub4:SetText("|cffA3A3A3世界与目标命中|r")
 yPos2 = yPos2 - 18
 
-CreateOptCheckbox("HideImpT", "Impact (Target)", "Hides hit visuals on the target character.", "hideTargetImpact", "HIDE_IMPACT_TARGET"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
-CreateOptCheckbox("HideAreaI", "Area (Instant Kit)", "Hides instant area-of-effect visuals.", "hideAreaInstant", "HIDE_AREA_INSTANT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
-CreateOptCheckbox("HideAreaM", "Area (Impact Kit)", "Hides area visuals triggered on impact.", "hideAreaImpact", "HIDE_AREA_IMPACT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
-CreateOptCheckbox("HideAreaP", "Area (Persistent)", "Hides persistent ground effects like Consecration.", "hideAreaPersistent", "HIDE_AREA_PERSISTENT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
+CreateOptCheckbox("HideImpT", "命中（目标）", "隐藏目标角色身上的命中视觉效果。", "hideTargetImpact", "HIDE_IMPACT_TARGET"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaI", "范围（即时套件）", "隐藏即时范围效果视觉。", "hideAreaInstant", "HIDE_AREA_INSTANT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaM", "范围（命中套件）", "隐藏命中时触发的范围视觉效果。", "hideAreaImpact", "HIDE_AREA_IMPACT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideAreaP", "范围（持续）", "隐藏如奉献等持续地面效果。", "hideAreaPersistent", "HIDE_AREA_PERSISTENT"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
 
 local sub5 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub5:SetPoint("TOPLEFT", col2X - 4, yPos2); sub5:SetText("|cffA3A3A3Missiles & Markers|r")
+sub5:SetPoint("TOPLEFT", col2X - 4, yPos2); sub5:SetText("|cffA3A3A3弹道与标记|r")
 yPos2 = yPos2 - 18
 
-CreateOptCheckbox("HideMiss", "Missile Projectiles", "Hides traveling bolts (Fireball, Frostbolt) and arrows.", "hideMissile", "HIDE_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
-CreateOptCheckbox("HideMissM", "Missile Markers", "Hides markers where missiles land.", "hideMissileMarker", "HIDE_MISSILE_MARKER"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
+CreateOptCheckbox("HideMiss", "弹道投射物", "隐藏飞行的弹道（火球术、寒冰箭等）和箭矢。", "hideMissile", "HIDE_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideMissM", "弹道落点标记", "隐藏弹道落点处的标记。", "hideMissileMarker", "HIDE_MISSILE_MARKER"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - secGap
 
 local sub6 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub6:SetPoint("TOPLEFT", col2X - 4, yPos2); sub6:SetText("|cffA3A3A3Audio Suppression|r")
+sub6:SetPoint("TOPLEFT", col2X - 4, yPos2); sub6:SetText("|cffA3A3A3音频抑制|r")
 yPos2 = yPos2 - 18
 
-CreateOptCheckbox("HideSndM", "Missile Sounds", "Suppresses sounds of traveling projectiles.", "hideSoundMissile", "HIDE_SOUND_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
-CreateOptCheckbox("HideSndE", "Impact & Event Sounds", "Suppresses sounds triggered by impacts or events.", "hideSoundEvent", "HIDE_SOUND_EVENT"):SetPoint("TOPLEFT", col2X, yPos2)
+CreateOptCheckbox("HideSndM", "弹道音效", "抑制飞行投射物的音效。", "hideSoundMissile", "HIDE_SOUND_MISSILE"):SetPoint("TOPLEFT", col2X, yPos2); yPos2 = yPos2 - rowH
+CreateOptCheckbox("HideSndE", "命中与事件音效", "抑制命中或事件触发的音效。", "hideSoundEvent", "HIDE_SOUND_EVENT"):SetPoint("TOPLEFT", col2X, yPos2)
 
 local col3X = 460
 local yPos3 = -120
 
 local sub7 = optCard:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-sub7:SetPoint("TOPLEFT", col3X - 4, yPos3); sub7:SetText("|cffA3A3A3Raid Tier Protection|r")
+sub7:SetPoint("TOPLEFT", col3X - 4, yPos3); sub7:SetText("|cffA3A3A3副本层级保护|r")
 yPos3 = yPos3 - 18
 
 for _, tierInfo in ipairs(ns.optimizationTierOptions or {}) do
@@ -805,8 +805,8 @@ local function ProtectedFile_RenderList()
     end
 
     fileListContent:SetHeight(math.max(1, visible * PROTECTED_FILE_ROW_H))
-    fileStats:SetText(string.format("%d total spells in file  |  %d matching  |  100 shown per page", total, filtered))
-    filePageLabel:SetText(string.format("Page %d/%d", protectedFileState.page, maxPage))
+    fileStats:SetText(string.format("文件中 %d 个法术  |  匹配 %d 个  |  每页显示 100 个", total, filtered))
+    filePageLabel:SetText(string.format("第 %d/%d 页", protectedFileState.page, maxPage))
     if protectedFileState.page > 1 then btnPrevPage:Enable() else btnPrevPage:Disable() end
     if protectedFileState.page < maxPage then btnNextPage:Enable() else btnNextPage:Disable() end
 end
@@ -891,7 +891,7 @@ ProtectedFile_RenderSearchResults = function()
     searchResultsScroll:SetVerticalScroll(0)
 
     if shown == 0 then
-        searchResultsEmpty:SetText("No new spells found")
+        searchResultsEmpty:SetText("未找到新法术")
         searchResultsEmpty:Show()
     else
         searchResultsEmpty:Hide()
@@ -1151,7 +1151,7 @@ fogStartSlider:SetMinMaxValues(0, 4000)
 fogStartSlider:SetValueStep(10)
 _G[fogStartSlider:GetName() .. "Low"]:SetText("0")
 _G[fogStartSlider:GetName() .. "High"]:SetText("4000")
-_G[fogStartSlider:GetName() .. "Text"]:SetText("Fog Start")
+_G[fogStartSlider:GetName() .. "Text"]:SetText("雾效起始")
 
 local fogEndSlider = CreateFrame("Slider", "TransmorpherMiscFogEndSlider", fogCard, "OptionsSliderTemplate")
 fogEndSlider:SetPoint("TOPLEFT", fogStartSlider, "BOTTOMLEFT", 0, -38)
@@ -1161,14 +1161,14 @@ fogEndSlider:SetMinMaxValues(0, 6000)
 fogEndSlider:SetValueStep(10)
 _G[fogEndSlider:GetName() .. "Low"]:SetText("0")
 _G[fogEndSlider:GetName() .. "High"]:SetText("6000")
-_G[fogEndSlider:GetName() .. "Text"]:SetText("Fog End")
+_G[fogEndSlider:GetName() .. "Text"]:SetText("雾效结束")
 
 local function SyncFogSliderText(sliderFrame, value)
     local text = _G[sliderFrame:GetName() .. "Text"]
     if sliderFrame == fogStartSlider then
-        text:SetText("Fog Start: " .. math.floor((value or 0) + 0.5))
+        text:SetText("雾效起始：" .. math.floor((value or 0) + 0.5))
     else
-        text:SetText("Fog End: " .. math.floor((value or 0) + 0.5))
+        text:SetText("雾效结束：" .. math.floor((value or 0) + 0.5))
     end
     text:SetTextColor(1, 0.82, 0)
 end

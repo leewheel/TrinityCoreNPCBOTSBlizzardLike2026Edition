@@ -8,7 +8,7 @@ ns.items = {
                     4562,
                 },
                 {
-                    "|cff1eff00Severing Axe|r",
+                    "|cff1eff00斩首之斧|r",
                 },
             },
             {
@@ -16,7 +16,7 @@ ns.items = {
                     3488,
                 },
                 {
-                    "|cff1eff00Copper Battle Axe|r",
+                    "|cff1eff00铜质战斧|r",
                 },
             },
             {

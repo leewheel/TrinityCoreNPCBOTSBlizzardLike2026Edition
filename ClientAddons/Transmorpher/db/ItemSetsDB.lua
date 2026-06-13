@@ -84,7 +84,7 @@ end
 
 -- Embedded sets data (parsed from itemsets.txt)
 local rawSetsData = {
-    {name="Devout", desc="Dungeon 1 Priest Set", class="PRIEST", items={{s="Hands",i=16692},{s="Head",i=16693},{s="Legs",i=16694},{s="Shoulder",i=16695},{s="Chest",i=16690},{s="Wrist",i=16697},{s="Waist",i=16696},{s="Feet",i=16691}}},
+    {name="虔诚", desc="牧师T1套装", class="PRIEST", items={{s="Hands",i=16692},{s="Head",i=16693},{s="Legs",i=16694},{s="Shoulder",i=16695},{s="Chest",i=16690},{s="Wrist",i=16697},{s="Waist",i=16696},{s="Feet",i=16691}}},
     {name="Virtuous", desc="Dungeon 2 Priest Set", class="PRIEST", items={{s="Hands",i=22081},{s="Head",i=22080},{s="Legs",i=22085},{s="Shoulder",i=22082},{s="Chest",i=22083},{s="Wrist",i=22079},{s="Waist",i=22078},{s="Feet",i=22084}}},
     {name="Prophecy", desc="Tier 1 Priest Raid Set", class="PRIEST", items={{s="Hands",i=16812},{s="Head",i=16813},{s="Legs",i=16814},{s="Shoulder",i=16816},{s="Chest",i=16815},{s="Wrist",i=16819},{s="Waist",i=16817},{s="Feet",i=16811}}},
     {name="Transcendence", desc="Tier 2 Priest Raid Set", class="PRIEST", items={{s="Hands",i=16920},{s="Head",i=16921},{s="Legs",i=16922},{s="Shoulder",i=16924},{s="Chest",i=16923},{s="Wrist",i=16926},{s="Waist",i=16925},{s="Feet",i=16919}}},

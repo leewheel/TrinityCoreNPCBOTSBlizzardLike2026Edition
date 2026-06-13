@@ -2720,6 +2720,7 @@ void BotDataMgr::Update(uint32 diff)
     RefreshNpcBotLLMConfig();
     NpcBotChatLLM::Engine::Instance().PollCompletedReplies();
     UpdateWandererGridRecycle(diff);
+    UpdateWandererLogSampler(diff);
     TryBotChannelChat(diff); // By leewheel 20260528 - world/party/raid chat ticker.
 
     botSpawnEvents.Update(diff);

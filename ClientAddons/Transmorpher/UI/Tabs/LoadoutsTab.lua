@@ -277,7 +277,7 @@ local function CreateSpecSlot(name, icon, pxOffset)
         if self.displayId then
             GameTooltip:AddLine("ID: "..self.displayId, 1, 0.8, 0)
         else
-            GameTooltip:AddLine("None selected", 0.5, 0.5, 0.5)
+            GameTooltip:AddLine("未选择", 0.5, 0.5, 0.5)
         end
         GameTooltip:Show()
     end)
@@ -582,7 +582,7 @@ local function UpdateLoadoutPreview(loadout)
     UpdSpec("Combat Pet", loadout.combatPetDisplay, "red", 1.0, 0.4, 0.4)
     if loadout.combatPetDisplay and loadout.combatPetDisplay > 0 then
         local petScale = loadout.combatPetScale or 1.0
-        previewSlots["Combat Pet"].scaleLabel:SetText(string.format("Scale: %g", petScale))
+        previewSlots["Combat Pet"].scaleLabel:SetText(string.format("缩放：%g", petScale))
         previewSlots["Combat Pet"].scaleLabel:SetTextColor(1.0, 0.4, 0.4)
         previewSlots["Combat Pet"].scaleLabel:Show()
     else 

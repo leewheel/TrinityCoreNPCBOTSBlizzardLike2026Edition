@@ -29,7 +29,7 @@ do local ul = btnModeAll:CreateTexture(nil, "OVERLAY"); ul:SetHeight(2)
 
 -- Direct Display ID input
 local directIDLabel = topBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-directIDLabel:SetPoint("RIGHT", topBar, "RIGHT", -64, 0); directIDLabel:SetText("|cffC8AA6EDisplay ID:|r")
+directIDLabel:SetPoint("RIGHT", topBar, "RIGHT", -64, 0); directIDLabel:SetText("|cffC8AA6E模型ID:|r")
 
 local directIDBox = CreateFrame("EditBox", "$parentHPetDirectID", topBar)
 directIDBox:SetSize(56, 16); directIDBox:SetPoint("LEFT", directIDLabel, "RIGHT", 4, 0)
@@ -76,7 +76,7 @@ searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11); searchBox:SetTextColor(0.95, 0.88,
 searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
 local searchHint = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-searchHint:SetPoint("LEFT", 2, 0); searchHint:SetText("Search combat pets...")
+searchHint:SetPoint("LEFT", 2, 0); searchHint:SetText("搜索战斗宠物...")
 searchBox:SetScript("OnEditFocusGained", function() searchHint:Hide() end)
 searchBox:SetScript("OnEditFocusLost", function(self) if self:GetText() == "" then searchHint:Show() end end)
 
@@ -89,7 +89,7 @@ hpSearchClear:SetScript("OnClick", function() searchBox:SetText(""); searchBox:C
 
 -- Type filter
 local familyLabel = typeContainer:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-familyLabel:SetPoint("LEFT", 6, 0); familyLabel:SetText("|cffC8AA6EType:|r")
+familyLabel:SetPoint("LEFT", 6, 0); familyLabel:SetText("|cffC8AA6E类型:|r")
 
 local allFamilies = {}
 local familySet = {}
@@ -99,12 +99,12 @@ if ns.combatPetsDB then
     end
     table.sort(allFamilies)
 end
-table.insert(allFamilies, 1, "All Types")
+table.insert(allFamilies, 1, "全部类型")
 
 local familyIdx = 1
 local familyBtn = ns.CreateGoldenButton("$parentHPetFamilyBtn", typeContainer)
 familyBtn:SetSize(130, 18); familyBtn:SetPoint("LEFT", familyLabel, "RIGHT", 4, 0)
-familyBtn:SetText("|cffffd700All Types|r")
+familyBtn:SetText("|cffffd700全部类型|r")
 
 -- Current assignment status bar
 local statusBar = CreateFrame("Frame", nil, hpetTab)
@@ -127,7 +127,7 @@ statusLabel:SetTextColor(0.96, 0.82, 0.30)
 local function UpdateStatusLabels()
     local state = TransmorpherCharacterState
     if not state then
-        statusLabel:SetText("|cff6a6050Combat Pet: None|r")
+        statusLabel:SetText("|cff6a6050战斗宠物：无|r")
         return
     end
 
@@ -143,8 +143,8 @@ local function UpdateStatusLabels()
         end
     end
     
-    local scaleText = state.HunterPetScale and string.format(" (Scale: %.1f)", state.HunterPetScale) or ""
-    statusLabel:SetText("|cffffd700Combat Pet:|r " .. (hpName and ("|cffaaccff" .. hpName .. "|r") or "|cff6a6050None|r") .. "|cff888888" .. scaleText .. "|r")
+    local scaleText = state.HunterPetScale and string.format(" (缩放: %.1f)", state.HunterPetScale) or ""
+    statusLabel:SetText("|cffffd700战斗宠物：|r " .. (hpName and ("|cffaaccff" .. hpName .. "|r") or "|cff6a6050无|r") .. "|cff888888" .. scaleText .. "|r")
 end
 
 -- ========== LIST (full width) ==========
@@ -157,11 +157,11 @@ listBg:SetBackdropColor(0.04, 0.03, 0.03, 0.9); listBg:SetBackdropBorderColor(0.
 local headerFrame = CreateFrame("Frame", nil, listBg)
 headerFrame:SetPoint("TOPLEFT", 4, -2); headerFrame:SetPoint("TOPRIGHT", -22, -2); headerFrame:SetHeight(18)
 local headerName = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerName:SetPoint("LEFT", 34, 0); headerName:SetText("|cffC8AA6EName|r")
+headerName:SetPoint("LEFT", 34, 0); headerName:SetText("|cffC8AA6E名称|r")
 local headerType = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerType:SetPoint("CENTER", 60, 0); headerType:SetText("|cffC8AA6EType|r")
+headerType:SetPoint("CENTER", 60, 0); headerType:SetText("|cffC8AA6E类型|r")
 local headerID = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerID:SetPoint("RIGHT", -8, 0); headerID:SetText("|cffC8AA6EDisplay ID|r")
+headerID:SetPoint("RIGHT", -8, 0); headerID:SetText("|cffC8AA6E模型ID|r")
 local headerSep = headerFrame:CreateTexture(nil, "ARTWORK")
 headerSep:SetPoint("BOTTOMLEFT", 0, 0); headerSep:SetPoint("BOTTOMRIGHT", 0, 0); headerSep:SetHeight(1)
 headerSep:SetTexture(0.50, 0.42, 0.18, 0.4)
@@ -182,17 +182,17 @@ bottomSepTop:SetTexture(0.60, 0.50, 0.18, 0.35)
 
 local btnSetHPet = ns.CreateGoldenButton("$parentBtnSetHPet", bottomBar)
 btnSetHPet:SetSize(130, 24); btnSetHPet:SetPoint("LEFT", 6, 0)
-btnSetHPet:SetText("|cffffd700Set Morph|r"); btnSetHPet:Disable()
+btnSetHPet:SetText("|cffffd700设置幻化|r"); btnSetHPet:Disable()
 
 local btnResetHPet = ns.CreateGoldenButton("$parentBtnResetHPet", bottomBar)
 btnResetHPet:SetSize(100, 24); btnResetHPet:SetPoint("LEFT", btnSetHPet, "RIGHT", 4, 0)
-btnResetHPet:SetText("|cffcc6666Reset|r")
+btnResetHPet:SetText("|cffcc6666重置|r")
 
 local bottomSep = bottomBar:CreateTexture(nil, "ARTWORK")
 bottomSep:SetSize(1, 18); bottomSep:SetPoint("LEFT", btnResetHPet, "RIGHT", 8, 0); bottomSep:SetTexture(0.50, 0.42, 0.18, 0.5)
 
 local petSizeLabel = bottomBar:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-petSizeLabel:SetPoint("LEFT", bottomSep, "RIGHT", 8, 0); petSizeLabel:SetText("|cffC8AA6EScale:|r")
+petSizeLabel:SetPoint("LEFT", bottomSep, "RIGHT", 8, 0); petSizeLabel:SetText("|cffC8AA6E缩放:|r")
 
 local petSizeBox = CreateFrame("EditBox", "$parentHPetSizeInput", bottomBar)
 petSizeBox:SetSize(36, 16); petSizeBox:SetPoint("LEFT", petSizeLabel, "RIGHT", 4, 0)
@@ -206,7 +206,7 @@ petSizeBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
 local btnPetSize = ns.CreateGoldenButton("$parentBtnHPetSize", bottomBar)
 btnPetSize:SetSize(60, 22); btnPetSize:SetPoint("LEFT", petSizeBox, "RIGHT", 4, 0)
-btnPetSize:SetText("|cffF5C842Resize|r")
+btnPetSize:SetText("|cffF5C842调整大小|r")
 btnPetSize:SetScript("OnClick", function()
     local scale = tonumber(petSizeBox:GetText())
     if scale and scale >= 0.1 and scale <= 10.0 and ns.IsMorpherReady() then
@@ -290,7 +290,7 @@ local function BuildHPetList()
     for _, b in ipairs(hpetButtons) do b:Hide() end
     hpetButtons = {}; hpetSelectedIdx = nil; btnSetHPet:Disable()
 
-    resultCount:SetText("|cffC8AA6E" .. #hpetFilteredList .. " results|r")
+    resultCount:SetText("|cffC8AA6E" .. #hpetFilteredList .. " 个结果|r")
 
     local bY = 0
     for idx, entry in ipairs(hpetFilteredList) do
@@ -348,9 +348,9 @@ local function BuildHPetList()
         row:SetScript("OnEnter", function()
             if hpetSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.06) end
             GameTooltip:SetOwner(row, "ANCHOR_RIGHT"); GameTooltip:AddLine(entry.name)
-            GameTooltip:AddLine("Type: "..entry.family, 1, 0.82, 0.1)
-            GameTooltip:AddLine("Display ID: "..entry.displayID, 1,1,1)
-            GameTooltip:AddLine("Click: Select  |  Double-click: Apply", 0.5,0.5,0.5); GameTooltip:Show()
+            GameTooltip:AddLine("类型："..entry.family, 1, 0.82, 0.1)
+            GameTooltip:AddLine("模型ID："..entry.displayID, 1,1,1)
+            GameTooltip:AddLine("点击：选择  |  双击：应用", 0.5,0.5,0.5); GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function()
             if hpetSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, defaultAlpha) end; GameTooltip:Hide()
@@ -367,19 +367,19 @@ end
 
 local function UpdateModeButtons()
     if currentMode == MODE_CURATED then
-        btnModeCurated:SetText("|cffffd700Curated Pets|r"); btnModeAll:SetText("|cff888888All Creatures|r")
+        btnModeCurated:SetText("|cffffd700精选宠物|r"); btnModeAll:SetText("|cff888888全部生物|r")
         if btnModeCurated.underline then btnModeCurated.underline:Show() end
         if btnModeAll.underline then btnModeAll.underline:Hide() end
         typeContainer:Show(); familyBtn:Enable(); familyLabel:SetAlpha(1)
         searchContainer:SetPoint("RIGHT", typeContainer, "LEFT", -4, 0)
-        searchHint:SetText("Search combat pets...")
+        searchHint:SetText("搜索战斗宠物...")
     else
-        btnModeCurated:SetText("|cff888888Curated Pets|r"); btnModeAll:SetText("|cffffd700All Creatures|r")
+        btnModeCurated:SetText("|cff888888精选宠物|r"); btnModeAll:SetText("|cffffd700全部生物|r")
         if btnModeCurated.underline then btnModeCurated.underline:Hide() end
         if btnModeAll.underline then btnModeAll.underline:Show() end
         typeContainer:Show(); familyBtn:Disable(); familyLabel:SetAlpha(0.4)
         searchContainer:SetPoint("RIGHT", typeContainer, "LEFT", -4, 0)
-        searchHint:SetText("Search all creatures...")
+        searchHint:SetText("搜索所有生物...")
     end
     if searchBox:GetText() == "" then searchHint:Show() end
 end

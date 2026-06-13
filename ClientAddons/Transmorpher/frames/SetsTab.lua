@@ -6,17 +6,17 @@ function ns.InitSetsTab(parent)
     local SelectSet
 
     local classDisplayNames = {
-        ALL = "All",
-        WARRIOR = "Warrior",
-        PALADIN = "Paladin",
-        HUNTER = "Hunter",
-        ROGUE = "Rogue",
-        PRIEST = "Priest",
-        DEATHKNIGHT = "Death Knight",
-        SHAMAN = "Shaman",
-        MAGE = "Mage",
-        WARLOCK = "Warlock",
-        DRUID = "Druid",
+        ALL = "全部",
+        WARRIOR = "战士",
+        PALADIN = "圣骑士",
+        HUNTER = "猎人",
+        ROGUE = "潜行者",
+        PRIEST = "牧师",
+        DEATHKNIGHT = "死亡骑士",
+        SHAMAN = "萨满",
+        MAGE = "法师",
+        WARLOCK = "术士",
+        DRUID = "德鲁伊",
     }
 
     local classes = {

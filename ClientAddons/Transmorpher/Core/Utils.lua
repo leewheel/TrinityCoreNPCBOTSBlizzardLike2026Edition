@@ -121,7 +121,7 @@ function ns.CreateSearchBar(parent, placeholder, width, height)
     -- Placeholder text
     local placeholderText = editBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
     placeholderText:SetPoint("LEFT", 2, 0)
-    placeholderText:SetText(placeholder or "Search...")
+    placeholderText:SetText(placeholder or "搜索...")
 
     -- Clear button
     local clearBtn = CreateFrame("Button", nil, frame)

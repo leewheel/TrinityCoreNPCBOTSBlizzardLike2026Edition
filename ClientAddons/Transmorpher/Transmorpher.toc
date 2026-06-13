@@ -1,21 +1,24 @@
 ## Interface: 30300
 ## Author: Kirazul
-## Title: Transmorpher
-## Notes: Client-side Transmog system for WotLK 3.3.5a with optional multiplayer sync. Requires dinput8.dll (or Universal Proxy). v2.0.0.
+## Title: 幻化大师
+## Notes: 魔兽世界3.3.5a全功能客户端幻化系统，支持多人同步。需要dinput8.dll。v2.0.0中文版。
 ## SavedVariables: TransmorpherSavedLooks, TransmorpherMorphFavorites, TransmorpherSettings, TransmorpherLoadoutsAccount
 ## SavedVariablesPerCharacter: TransmorpherCharacterState, TransmorpherSettingsPerChar
 ## Version: 2.0.0
 
 db\ItemsDB.lua
+db\ItemsCN.lua
 db\ItemsAPI.lua
 db\MountsDB.lua
 db\PetsDB.lua
 db\HunterPetsDB.lua
 db\CreatureDisplayDB.lua
+db\CreatureDisplayCN.lua
 db\EnchantsDB.lua
 db\PreviewSetupDB.lua
 db\PreviewSetupAPI.lua
 db\ItemSetsDB.lua
+db\ItemSetsCN.lua
 
 frames\QueryItem.lua
 frames\WowheadURL.lua
@@ -27,6 +30,8 @@ frames\SetsTab.lua
 db\TitlesDB.lua
 
 Core\Constants.lua
+Core\LocaleLoader.lua
+Core\NameResolver.lua
 Core\Utils.lua
 Core\LoadoutCodec.lua
 Core\DLLBridge.lua

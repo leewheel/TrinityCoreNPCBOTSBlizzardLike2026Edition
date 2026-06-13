@@ -130,19 +130,19 @@ ns.spellToFormGroup = {
 
 -- Display info for each group
 ns.formGroupDB = {
-    ["Bear"] = {name="Bear Form", icon="Interface\\Icons\\Ability_Racial_BearForm"},
-    ["Cat"] = {name="Cat Form", icon="Interface\\Icons\\Ability_Druid_CatForm"},
-    ["Moonkin"] = {name="Moonkin Form", icon="Interface\\Icons\\Spell_Nature_ForceOfNature"},
-    ["Tree"] = {name="Tree of Life", icon="Interface\\Icons\\Ability_Druid_TreeofLife"},
-    ["Travel"] = {name="Travel Form", icon="Interface\\Icons\\Ability_Druid_TravelForm"},
-    ["Aquatic"] = {name="Aquatic Form", icon="Interface\\Icons\\Ability_Druid_AquaticForm"},
-    ["Flight"] = {name="Flight Form", icon="Interface\\Icons\\Ability_Druid_FlightForm"},
-    ["GhostWolf"] = {name="Ghost Wolf", icon="Interface\\Icons\\Spell_Nature_SpiritWolf"},
-    ["Metamorphosis"] = {name="Metamorphosis", icon="Interface\\Icons\\Spell_Shadow_DemonForm"},
-    ["Shadowform"] = {name="Shadowform", icon="Interface\\Icons\\Spell_Shadow_Shadowform"},
-    ["DBW_Taunka"] = {name="Taunka (DBW)", icon=ns.GetSpellIcon(71484)},
-    ["DBW_Vrykul"] = {name="Vrykul (DBW)", icon=ns.GetSpellIcon(71485)},
-    ["DBW_IronDwarf"] = {name="Iron Dwarf (DBW)", icon=ns.GetSpellIcon(71491)},
+    ["Bear"] = {name="熊形态", icon="Interface\\Icons\\Ability_Racial_BearForm"},
+    ["Cat"] = {name="猎豹形态", icon="Interface\\Icons\\Ability_Druid_CatForm"},
+    ["Moonkin"] = {name="枭兽形态", icon="Interface\\Icons\\Spell_Nature_ForceOfNature"},
+    ["Tree"] = {name="生命之树", icon="Interface\\Icons\\Ability_Druid_TreeofLife"},
+    ["Travel"] = {name="旅行形态", icon="Interface\\Icons\\Ability_Druid_TravelForm"},
+    ["Aquatic"] = {name="水栖形态", icon="Interface\\Icons\\Ability_Druid_AquaticForm"},
+    ["Flight"] = {name="飞行形态", icon="Interface\\Icons\\Ability_Druid_FlightForm"},
+    ["GhostWolf"] = {name="幽灵狼", icon="Interface\\Icons\\Spell_Nature_SpiritWolf"},
+    ["Metamorphosis"] = {name="恶魔变形", icon="Interface\\Icons\\Spell_Shadow_DemonForm"},
+    ["Shadowform"] = {name="暗影形态", icon="Interface\\Icons\\Spell_Shadow_Shadowform"},
+    ["DBW_Taunka"] = {name="坦卡族 (DBW)", icon=ns.GetSpellIcon(71484)},
+    ["DBW_Vrykul"] = {name="维库人 (DBW)", icon=ns.GetSpellIcon(71485)},
+    ["DBW_IronDwarf"] = {name="铁矮人 (DBW)", icon=ns.GetSpellIcon(71491)},
 }
 
 -- Order for UI

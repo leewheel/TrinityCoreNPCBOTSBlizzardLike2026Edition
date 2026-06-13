@@ -62,7 +62,7 @@ do
         local ids = raceDisplayIds[raceName]
         local safe = raceName:gsub("%s+", "")
         for _, gender in ipairs({2, 3}) do
-            local gLabel = gender == 2 and " M" or " F"
+            local gLabel = gender == 2 and " 男" or " 女"
             local btn = ns.CreateGoldenButton("$parentRace"..safe..(gender==2 and "M" or "F"), morphTab)
             btn:SetSize(btnWidth, btnHeight)
             local xPos = 10 + col * (btnWidth + 5)

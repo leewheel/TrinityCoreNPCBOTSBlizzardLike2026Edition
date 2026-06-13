@@ -148,7 +148,7 @@ do
     searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
     local searchPlaceholder = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-    searchPlaceholder:SetPoint("LEFT", 2, 0); searchPlaceholder:SetText("Search by name or item ID...")
+    searchPlaceholder:SetPoint("LEFT", 2, 0); searchPlaceholder:SetText("按名称或物品ID搜索...")
     searchBox:SetScript("OnEditFocusGained", function() searchPlaceholder:Hide() end)
     searchBox:SetScript("OnEditFocusLost", function(self) if self:GetText() == "" then searchPlaceholder:Show() end end)
 
@@ -278,7 +278,7 @@ do
             if not entry then return end
             GameTooltip:Hide(); GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT"); GameTooltip:ClearLines()
             GameTooltip:AddLine("|cffF5C842"..entry.name.."|r")
-            GameTooltip:AddLine("Enchant ID: "..entry.id, 0.7, 0.7, 0.7)
+            GameTooltip:AddLine("附魔ID："..entry.id, 0.7, 0.7, 0.7)
             GameTooltip:Show()
             return
         end
@@ -286,7 +286,7 @@ do
         if not records or not records[recordIndex] then return end
         local ids, names = records[recordIndex][1], records[recordIndex][2]
         GameTooltip:Hide(); GameTooltip:SetOwner(self, "ANCHOR_TOPLEFT"); GameTooltip:ClearLines()
-        GameTooltip:AddLine("This appearance is provided by:", 1, 1, 1); GameTooltip:AddLine(" ")
+        GameTooltip:AddLine("此外观由以下装备提供：", 1, 1, 1); GameTooltip:AddLine(" ")
         local selIdx = selectedInRecord[ids[1]] or 1
         for i, id in ipairs(ids) do
             GameTooltip:AddLine((i == selIdx and "> " or "- ")..names[i]..(id == (mainFrame.selectedSlot and mainFrame.selectedSlot.itemId) and " *" or ""))
@@ -474,7 +474,7 @@ do
     previewTab.UpdateEnchantMode = function(self, enchantSlotName)
         self.enchantMode = true; self.enchantSlotName = enchantSlotName
         list:Show(); dropContainer:Hide(); slider:Show()
-        searchPlaceholder:SetText("Search enchants..."); searchBox:SetText(""); self.searchQuery = ""; searchClear:Hide(); searchPlaceholder:Show()
+        searchPlaceholder:SetText("搜索附魔..."); searchBox:SetText(""); self.searchQuery = ""; searchClear:Hide(); searchPlaceholder:Show()
         enchantPage = 1
         if self:IsShown() then RefreshEnchantList() end
     end
@@ -483,7 +483,7 @@ do
         list:SetCustomEntries(nil)
         list:SetCustomRenderer(nil)
         list:Show(); slider:Show(); dropContainer:Show()
-        searchPlaceholder:SetText("Search by name or item ID..."); searchBox:SetText(""); self.searchQuery = ""; searchClear:Hide(); searchPlaceholder:Show()
+        searchPlaceholder:SetText("按名称或物品ID搜索..."); searchBox:SetText(""); self.searchQuery = ""; searchClear:Hide(); searchPlaceholder:Show()
     end
 
     -- Search timer

@@ -211,12 +211,12 @@ for slotName, texturePath in pairs(ns.slotTextures) do
                 if equippedId and equippedId == self.itemId then
                     self.isMorphed = false; self.morphedItemId = nil
                     ns.HideMorphGlow(self)
-                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: "..self.slotName.." already equipped.")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r："..self.slotName.." 已装备。")
                 else
                     ns.SendMorphCommand("ITEM:"..ns.slotToEquipSlotId[self.slotName]..":"..self.itemId)
                     didChange = true
                     self.isMorphed = true; self.morphedItemId = self.itemId
-                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: Morphed "..self.slotName.."!")
+                    SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r："..self.slotName.." 已幻化！")
                     ns.FlashMorphSlot(self)
                 end
                 if didChange then
@@ -227,7 +227,7 @@ for slotName, texturePath in pairs(ns.slotTextures) do
                     end
                 end
             else
-                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<Transmorpher>|r: |cffff0000DLL not loaded!|r")
+                SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r：|cffff0000DLL未加载！|r")
             end
             PlaySound("gsTitleOptionOK"); return
         end

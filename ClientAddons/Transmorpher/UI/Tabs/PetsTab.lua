@@ -31,7 +31,7 @@ searchBox:SetFont("Fonts\\FRIZQT__.TTF", 11); searchBox:SetTextColor(0.95, 0.88,
 searchBox:SetScript("OnEscapePressed", function(self) self:ClearFocus() end)
 
 local searchHint = searchBox:CreateFontString(nil, "OVERLAY", "GameFontDisableSmall")
-searchHint:SetPoint("LEFT", 2, 0); searchHint:SetText("Search pets...")
+searchHint:SetPoint("LEFT", 2, 0); searchHint:SetText("搜索宠物...")
 searchBox:SetScript("OnEditFocusGained", function()
     searchHint:Hide()
     searchContainer:SetBackdropBorderColor(0.88, 0.74, 0.30, 0.95)
@@ -73,7 +73,7 @@ statusLabel:SetTextColor(0.96, 0.82, 0.30)
 local function UpdateStatusLabels()
     local state = TransmorpherCharacterState
     if not state then
-        statusLabel:SetText("|cff6a6050Pet: None|r")
+        statusLabel:SetText("|cff6a6050宠物：无|r")
         return
     end
 
@@ -83,7 +83,7 @@ local function UpdateStatusLabels()
             if entry[3] == state.PetDisplay then pName = entry[1]; break end
         end
     end
-    statusLabel:SetText("|cffffd700Pet:|r " .. (pName and ("|cffaaccff" .. pName .. "|r") or "|cff6a6050None|r"))
+    statusLabel:SetText("|cffffd700宠物：|r " .. (pName and ("|cffaaccff" .. pName .. "|r") or "|cff6a6050无|r"))
 end
 
 -- List background (full width)
@@ -102,9 +102,9 @@ listBg:SetBackdropBorderColor(0.80, 0.65, 0.22, 0.85)
 local headerFrame = CreateFrame("Frame", nil, listBg)
 headerFrame:SetPoint("TOPLEFT", 4, -2); headerFrame:SetPoint("TOPRIGHT", -22, -2); headerFrame:SetHeight(18)
 local headerName = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerName:SetPoint("LEFT", 34, 0); headerName:SetText("|cffA08D65Name|r")
+headerName:SetPoint("LEFT", 34, 0); headerName:SetText("|cffA08D65名称|r")
 local headerID = headerFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
-headerID:SetPoint("RIGHT", -8, 0); headerID:SetText("|cffA08D65Display ID|r")
+headerID:SetPoint("RIGHT", -8, 0); headerID:SetText("|cffA08D65模型ID|r")
 local headerSep = headerFrame:CreateTexture(nil, "ARTWORK")
 headerSep:SetPoint("BOTTOMLEFT", 0, 0); headerSep:SetPoint("BOTTOMRIGHT", 0, 0); headerSep:SetHeight(1)
 headerSep:SetTexture(0.50, 0.42, 0.18, 0.4)
@@ -119,7 +119,7 @@ listScroll:SetScrollChild(listContent)
 -- Bottom buttons
 local btnSetPet = ns.CreateGoldenButton("$parentBtnSetPet", petTab)
 btnSetPet:SetSize(140, 26); btnSetPet:SetPoint("BOTTOMLEFT", 10, 4)
-btnSetPet:SetText("|cffffd700Set Pet|r"); btnSetPet:Disable()
+btnSetPet:SetText("|cffffd700设置宠物|r"); btnSetPet:Disable()
 
 local btnResetPet = ns.CreateGoldenButton("$parentBtnResetPet", petTab)
 btnResetPet:SetSize(120, 26); btnResetPet:SetPoint("LEFT", btnSetPet, "RIGHT", 8, 0)
@@ -136,7 +136,7 @@ local function AddButtonTooltip(btn, title, desc)
     btn:HookScript("OnLeave", function() GameTooltip:Hide() end)
 end
 
-AddButtonTooltip(btnSetPet, "Set Pet", "Assign this appearance to your non-combat pet.")
+AddButtonTooltip(btnSetPet, "设置宠物", "将此外观分配给非战斗宠物。")
 AddButtonTooltip(btnResetPet, "Reset Pet", "Clear all pet morphing assignments.")
 
 -- State
@@ -168,7 +168,7 @@ local function BuildPetList()
     for _, b in ipairs(petButtons) do b:Hide() end
     petButtons = {}; petSelectedIdx = nil; btnSetPet:Disable()
 
-    resultCount:SetText("|cff6a6050" .. #petFilteredList .. " pets|r")
+    resultCount:SetText("|cff6a6050" .. #petFilteredList .. " 个宠物|r")
 
     local bY = 0
     for idx, entry in ipairs(petFilteredList) do
@@ -214,11 +214,15 @@ local function BuildPetList()
                 ns.UpdateSpecialSlots()
                 UpdateStatusLabels()
                 SELECTED_CHAT_FRAME:AddMessage("|cffF5C842<幻化>|r: 宠物已幻化为 "..entry.name.." ("..entry.displayID..")")
+                PlaySound("gsTitleOptionOK")
+            end
+        end)
+        row:SetScript("OnEnter", function()
             if petSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, 0.06) end
             GameTooltip:SetOwner(row, "ANCHOR_RIGHT"); GameTooltip:AddLine(entry.name)
-            GameTooltip:AddLine("Display ID: "..entry.displayID, 1,1,1)
-            if entry.spellID > 0 then GameTooltip:AddLine("Spell ID: "..entry.spellID, 0.7,0.7,0.7) end
-            GameTooltip:AddLine("Click: Select  |  Double-click: Apply", 0.5,0.5,0.5); GameTooltip:Show()
+            GameTooltip:AddLine("模型ID："..entry.displayID, 1,1,1)
+            if entry.spellID > 0 then GameTooltip:AddLine("法术ID："..entry.spellID, 0.7,0.7,0.7) end
+            GameTooltip:AddLine("点击：选择  |  双击：应用", 0.5,0.5,0.5); GameTooltip:Show()
         end)
         row:SetScript("OnLeave", function()
             if petSelectedIdx ~= idx then rowBg:SetTexture(1, 1, 1, defaultAlpha) end; GameTooltip:Hide()

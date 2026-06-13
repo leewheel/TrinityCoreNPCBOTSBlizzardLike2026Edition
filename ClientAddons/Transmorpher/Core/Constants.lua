@@ -149,43 +149,43 @@ ns.defaultArmorSubclass = {
 -- RACE MORPH DISPLAY IDs
 -- ============================================================
 ns.raceDisplayIds = {
-    ["Human"]      = { [2] = 19723, [3] = 19724 },
-    ["Orc"]        = { [2] = 6785,  [3] = 20316 },
-    ["Dwarf"]      = { [2] = 20317, [3] = 13250 },
-    ["Night Elf"]  = { [2] = 20318, [3] = 2222  },
-    ["Undead"]     = { [2] = 28193, [3] = 23112 },
-    ["Tauren"]     = { [2] = 20585, [3] = 20584 },
-    ["Gnome"]      = { [2] = 20580, [3] = 20581 },
-    ["Troll"]      = { [2] = 20321, [3] = 4358  },
-    ["Blood Elf"]  = { [2] = 20578, [3] = 20579 },
-    ["Draenei"]    = { [2] = 17155, [3] = 20323 },
+    ["人类"]      = { [2] = 19723, [3] = 19724 },
+    ["兽人"]        = { [2] = 6785,  [3] = 20316 },
+    ["矮人"]      = { [2] = 20317, [3] = 13250 },
+    ["暗夜精灵"]  = { [2] = 20318, [3] = 2222  },
+    ["亡灵"]     = { [2] = 28193, [3] = 23112 },
+    ["牛头人"]     = { [2] = 20585, [3] = 20584 },
+    ["侏儒"]      = { [2] = 20580, [3] = 20581 },
+    ["巨魔"]      = { [2] = 20321, [3] = 4358  },
+    ["血精灵"]  = { [2] = 20578, [3] = 20579 },
+    ["德莱尼"]    = { [2] = 17155, [3] = 20323 },
 }
-ns.raceOrder = {"Human", "Orc", "Dwarf", "Night Elf", "Undead", "Tauren", "Gnome", "Troll", "Blood Elf", "Draenei"}
+ns.raceOrder = {"人类", "兽人", "矮人", "暗夜精灵", "亡灵", "牛头人", "侏儒", "巨魔", "血精灵", "德莱尼"}
 
 -- ============================================================
 -- POPULAR CREATURES (for Morph tab quick buttons)
 -- ============================================================
 ns.popularCreatures = {
-    { name = "Lich King",     id = 22234 },
-    { name = "Illidan",       id = 21135 },
-    { name = "Sylvanas",      id = 28213 },
-    { name = "Alexstrasza",   id = 28227 },
-    { name = "Ragnaros",      id = 11121 },
-    { name = "Brann Bronzebeard", id = 22266 },
-    { name = "Malygos",       id = 26752 },
-    { name = "Tuskarr",       id = 24685 },
-    { name = "Kel'Thuzad",    id = 15945 },
-    { name = "Yogg-Saron",    id = 28817 },
-    { name = "Kael'thas",     id = 20023 },
-    { name = "Lady Vashj",    id = 20748 },
-    { name = "Nefarian",      id = 11380 },
-    { name = "Onyxia",        id = 8570  },
-    { name = "Arthas",        id = 24949 },
-    { name = "Uther",         id = 16929 },
-    { name = "Evil Arthas",   id = 22235 },
-    { name = "Velen",         id = 23749 },
-    { name = "Dark Valkier",  id = 25517 },
-    { name = "Penguin",       id = 24698 },
+    { name = "巫妖王",     id = 22234 },
+    { name = "伊利丹",       id = 21135 },
+    { name = "希尔瓦娜斯",      id = 28213 },
+    { name = "阿莱克丝塔萨",   id = 28227 },
+    { name = "拉格纳罗斯",      id = 11121 },
+    { name = "布莱恩·铜须", id = 22266 },
+    { name = "玛里苟斯",       id = 26752 },
+    { name = "海象人",       id = 24685 },
+    { name = "克尔苏加德",    id = 15945 },
+    { name = "尤格-萨隆",    id = 28817 },
+    { name = "凯尔萨斯",     id = 20023 },
+    { name = "瓦斯琪女士",    id = 20748 },
+    { name = "奈法利安",      id = 11380 },
+    { name = "奥妮克希亚",        id = 8570  },
+    { name = "阿尔萨斯",        id = 24949 },
+    { name = "乌瑟尔",         id = 16929 },
+    { name = "邪恶阿尔萨斯",   id = 22235 },
+    { name = "维伦",         id = 23749 },
+    { name = "黑暗瓦格里",  id = 25517 },
+    { name = "企鹅",       id = 24698 },
 }
 
 -- ============================================================
@@ -223,6 +223,20 @@ ns.combatPetFamilyIcons = {
     ["Silithid"]      = "Interface\\Icons\\Ability_Hunter_Pet_Silithid",
     ["Demon"]         = "Interface\\Icons\\Spell_Shadow_SummonFelHunter",
     ["Elemental"]     = "Interface\\Icons\\Spell_Frost_SummonWaterElemental_2",
+}
+
+-- Combat pet family Chinese names (for filter display)
+ns.combatPetFamilyCN = {
+    ["Bear"] = "熊", ["Boar"] = "野猪", ["Cat"] = "猫", ["Carrion Bird"] = "食腐鸟",
+    ["Crab"] = "蟹", ["Crocolisk"] = "鳄鱼", ["Dragonhawk"] = "龙鹰", ["Gorilla"] = "猩猩",
+    ["Hyena"] = "土狼", ["Moth"] = "飞蛾", ["Nether Ray"] = "虚空鳐", ["Raptor"] = "迅猛龙",
+    ["Ravager"] = "掠食者", ["Scorpid"] = "蝎子", ["Serpent"] = "毒蛇", ["Spider"] = "蜘蛛",
+    ["Sporebat"] = "孢子蝙蝠", ["Tallstrider"] = "陆行鸟", ["Turtle"] = "海龟",
+    ["Warp Stalker"] = "迁跃捕猎者", ["Wasp"] = "黄蜂", ["Wolf"] = "狼",
+    ["Worm"] = "蠕虫", ["Bat"] = "蝙蝠", ["Chimaera"] = "奇美拉",
+    ["Core Hound"] = "熔核犬", ["Devilsaur"] = "魔暴龙", ["Rhino"] = "犀牛",
+    ["Silithid"] = "其拉虫", ["Demon"] = "恶魔", ["Elemental"] = "元素",
+    ["Creature"] = "生物",
 }
 
 -- ============================================================

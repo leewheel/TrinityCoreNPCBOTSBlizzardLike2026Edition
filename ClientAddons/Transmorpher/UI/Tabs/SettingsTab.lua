@@ -127,7 +127,7 @@ createCheckboxRow(persistenceCard, "按角色保存宠物幻化", "savePetMorph"
 createCheckboxRow(persistenceCard, "按角色保存战斗宠物幻化", "saveCombatPetMorph", -144, "为此角色记住猎人宠物幻化")
 
 local behaviorCard = createCard(scrollChild, "行为", -202, 112)
-createCheckboxRow(behaviorCard, "显示术士恶魔形态", "showMetamorphosis", -42, "临时显示恶魔变形形态（暂停幻化）", function(enabled)
+createCheckboxRow(behaviorCard, "显示术士恶魔形态", "showMetamorphosis", -42, "临时显示恶魔形态（暂停幻化）", function(enabled)
     ns.SendRawMorphCommand("SET:META:"..(enabled and "1" or "0"))
     if classFileName == "WARLOCK" then
         local inForm = GetShapeshiftForm() > 0
@@ -142,7 +142,7 @@ createCheckboxRow(behaviorCard, "显示术士恶魔形态", "showMetamorphosis",
         end
     end
 end)
-createCheckboxRow(behaviorCard, "变形态时保持幻化", "morphInShapeshift", -76, "变形时保持幻化效果（如德鲁伊形态等）", function(enabled)
+createCheckboxRow(behaviorCard, "变形态时保持幻化", "morphInShapeshift", -76, "变形态时保持幻化效果（如德鲁伊形态等）", function(enabled)
     ns.SendRawMorphCommand("SET:SHAPE:"..(enabled and "1" or "0"))
     if enabled and ns.morphSuspended then
         ns.morphSuspended = false
