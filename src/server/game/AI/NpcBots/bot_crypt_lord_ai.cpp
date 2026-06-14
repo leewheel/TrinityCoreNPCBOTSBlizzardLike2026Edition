@@ -308,6 +308,7 @@ public:
             if (!HasRole(BOT_ROLE_DPS))
                 return;
 
+            //IMPALE
             if (IsSpellReady(IMPALE_1, diff) && _impaleCheckTimer <= diff && me->GetPower(POWER_MANA) >= IMPALE_COST &&
                 me->isAttackReady() && Rand() < 75)
             {
