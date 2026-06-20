@@ -20293,12 +20293,13 @@ if ns.items then
             for _, entry in ipairs(entries) do
                 local itemID = entry[1] and entry[1][1]
                 if itemID and ns.itemsCN[itemID] then
-                    local cc = entry[2] and entry[2][1] and entry[2][1]:match("^(|c%%x+)")
-                    if cc then
-                        entry[2][1] = cc .. ns.itemsCN[itemID] .. "|r"
-                    else
-                        entry[2][1] = ns.itemsCN[itemID]
+                    local oldName = entry[2] and entry[2][1] or ""
+                    -- Extract color code (7 chars: |c + 6 hex digits)
+                    local cc = string.sub(oldName, 1, 10)
+                    if string.sub(cc, 1, 2) ~= "|c" then
+                        cc = "|cffffffff"
                     end
+                    entry[2][1] = cc .. ns.itemsCN[itemID] .. "|r"
                 end
             end
         end
